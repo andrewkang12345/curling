@@ -1,0 +1,17 @@
+{
+  "placement": "A",
+  "noise_sigma": 0.0,
+  "best_speed": 0.1257752627134323,
+  "best_angle": 0.015686990693211555,
+  "best_spin": -1,
+  "elapsed_sec": 31.11,
+  "grid": {
+    "n_speed": 19,
+    "n_angle": 19
+  },
+  "refine_trials": 120,
+  "batches": {
+    "coarse": 2048,
+    "refine": 4096
+  }
+}
