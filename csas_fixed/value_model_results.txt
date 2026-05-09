@@ -8,3 +8,16 @@
   test: mse=2.121782 rmse=1.456634 nll=0.743404 mean_sigma=1.393186 median_sigma=1.492784 coverage_1sigma=0.698338 coverage_2sigma=0.949879
   deterministic_settf_same_fold: test_mse=2.121725 test_rmse=1.456614
   graphtf_same_fold: test_mse=2.138082 test_rmse=1.462218
+
+2026-05-09 graphtf_gaussian holdout=23240026
+  checkpoint: holdouts/23240026/model_graphtf_gaussian/model.pt
+  architecture: ValueGraphTransformerGaussianFast, hidden=256, layers=4, heads=4, dropout=0.10
+  graph_features: GNN_EDGE_SCALAR_MODE=button_visible_plus_release_reach_with_product, GNN_NODE_FEATURE_MODE=none, GNN_RELEASE_NODE_MODE=three
+  objective: MSE(mean, target) + 0.2 * GaussianNLL(mean, logvar, target)
+  selection_key: val_mse + 0.05 * val_nll
+  synth_frac: 0.50
+  best_epoch: 64
+  val: mse=2.008764 rmse=1.417309 nll=0.870218 mean_sigma=1.469320 median_sigma=1.579377 coverage_1sigma=0.717935 coverage_2sigma=0.963278
+  test: mse=2.141534 rmse=1.463398 nll=0.819031 mean_sigma=1.482445 median_sigma=1.590979 coverage_1sigma=0.718306 coverage_2sigma=0.965157
+  deterministic_graphtf_same_fold: test_mse=2.138082 test_rmse=1.462218
+  gaussian_settf_same_fold: test_mse=2.121782 test_rmse=1.456634

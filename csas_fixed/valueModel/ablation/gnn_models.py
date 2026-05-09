@@ -2176,6 +2176,76 @@ class ValueGraphTransformerFast(nn.Module):
         return self.value_head(global_out)
 
 
+class ValueGraphTransformerGaussianFast(nn.Module):
+    """Vectorized Graph Transformer with Gaussian mean/log-variance heads."""
+
+    def __init__(self, input_dim=24, cond_dim=3, hidden_dim=128,
+                 n_layers=3, n_heads=4, dropout=0.1, min_logvar=-6.0, max_logvar=3.5, **kwargs):
+        super().__init__()
+        self.input_dim = input_dim
+        self.cond_dim = cond_dim
+        self.hidden_dim = hidden_dim
+        self.min_logvar = float(min_logvar)
+        self.max_logvar = float(max_logvar)
+
+        self.node_proj = nn.Linear(NODE_FEAT_DIM, hidden_dim)
+        self.cond_proj = nn.Linear(cond_dim, hidden_dim)
+        self.global_token = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
+
+        self.layers = nn.ModuleList([
+            GraphTransformerLayer(hidden_dim, n_heads=n_heads,
+                                 edge_feat_dim=EDGE_FEAT_DIM, dropout=dropout)
+            for _ in range(n_layers)
+        ])
+
+        self.mean_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+        self.logvar_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+
+    def forward(self, x, c):
+        B = x.size(0)
+        device = x.device
+
+        node_feats, node_coords, node_mask, n_nodes = build_graph_batch_fast(x, device)
+        max_N = node_feats.shape[1]
+        edge_feats = compute_edge_features_fast(node_coords, node_feats, node_mask, c=c)
+
+        h = self.node_proj(node_feats)
+        h = h * node_mask.unsqueeze(-1).float()
+
+        global_h = self.cond_proj(c).unsqueeze(1) + self.global_token.expand(B, -1, -1)
+        h = torch.cat([global_h, h], dim=1)
+
+        new_N = max_N + 1
+        new_edge = torch.zeros(B, new_N, new_N, EDGE_FEAT_DIM, device=device)
+        new_edge[:, 1:, 1:, :] = edge_feats
+
+        new_mask = torch.zeros(B, new_N, dtype=torch.bool, device=device)
+        new_mask[:, 0] = True
+        new_mask[:, 1:] = node_mask
+
+        for layer in self.layers:
+            h = layer(h, new_edge, new_mask)
+
+        global_out = h[:, 0, :]
+        mean = self.mean_head(global_out)
+        logvar = self.logvar_head(global_out).clamp(self.min_logvar, self.max_logvar)
+        return mean, logvar
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Registry
 # ─────────────────────────────────────────────────────────────────────
@@ -2183,4 +2253,5 @@ class ValueGraphTransformerFast(nn.Module):
 GNN_REGISTRY = {
     "egnn": ValueEGNNFast,
     "graph_transformer": ValueGraphTransformerFast,
+    "graph_transformer_gaussian": ValueGraphTransformerGaussianFast,
 }
