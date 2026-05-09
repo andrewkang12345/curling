@@ -32,6 +32,7 @@ M_PER_RAW = MM_PER_RAW / 1000.0
 STONE_RADIUS_M = 0.145
 HOUSE_RADII_M = [0.1524, 0.6096, 1.2192, 1.8288]
 THROWER_COLOR = "#f2c14e"
+END_SENTINEL_RAW = np.array([POS_MAX, POS_MAX], dtype=np.float32)
 
 
 def _in_play(stones_raw: np.ndarray) -> np.ndarray:
@@ -154,14 +155,13 @@ def _predict_value(model, stones_raw: np.ndarray, cond: np.ndarray, device: torc
 def _candidate_heatmap(
     model,
     pre_stones_raw: np.ndarray,
-    row: pd.Series,
+    cond: np.ndarray,
     thrown_slot: int,
     device: torch.device,
     grid_n: int,
     extent_m: float,
     batch_size: int,
 ):
-    cond = _row_condition(row)
     xs_m = np.linspace(-extent_m, extent_m, grid_n, dtype=np.float32)
     ys_m = np.linspace(-extent_m, extent_m, grid_n, dtype=np.float32)
     xx_m, yy_m = np.meshgrid(xs_m, ys_m)
@@ -183,6 +183,90 @@ def _candidate_heatmap(
     return xs_m, ys_m, post_values - pre_value, pre_value
 
 
+def _synthetic_state(rng: np.random.Generator, state_idx: int):
+    stones = np.tile(END_SENTINEL_RAW, (NUM_STONES, 1)).astype(np.float32)
+    n_live = int(rng.integers(3, 9))
+    slots = rng.choice(NUM_STONES, size=n_live, replace=False)
+    placed_m: list[np.ndarray] = []
+    for slot in slots:
+        for _ in range(200):
+            radius = float(rng.uniform(0.15, 1.85))
+            theta = float(rng.uniform(0.0, 2.0 * np.pi))
+            pos_m = np.array([radius * np.cos(theta), radius * np.sin(theta)], dtype=np.float32)
+            if all(np.linalg.norm(pos_m - p) > 2.1 * STONE_RADIUS_M for p in placed_m):
+                stones[slot] = BUTTON_RAW + pos_m / M_PER_RAW
+                placed_m.append(pos_m)
+                break
+
+    block = int(rng.integers(0, 2))
+    block_start = 6 if block else 0
+    candidates = [i for i in range(block_start, block_start + 6) if not _in_play(stones[[i]])[0]]
+    thrown_slot = candidates[0] if candidates else block_start
+    stones[thrown_slot] = END_SENTINEL_RAW
+
+    cond = np.array(
+        [float(rng.uniform(0.05, 0.65)), float(rng.integers(0, 2)), float(block)],
+        dtype=np.float32,
+    )
+    label = f"synthetic_{state_idx:02d}"
+    return {
+        "label": label,
+        "title": f"Synthetic state {state_idx} | stone {thrown_slot + 1}",
+        "pre_stones": stones,
+        "cond": cond,
+        "slot": int(thrown_slot),
+    }
+
+
+def _real_case(ds: ValueDataset, idx: int, slot: int):
+    row = ds.df.iloc[idx]
+    prev_row = _previous_row(ds.df, idx)
+    if prev_row is None:
+        return None
+    return {
+        "label": (
+            f"early_comp{int(row['CompetitionID'])}_game{int(row['GameID'])}_"
+            f"end{int(row['EndID'])}_shot{int(row['ShotID'])}"
+        ),
+        "title": (
+            f"Early test state | comp {int(row['CompetitionID'])} game {int(row['GameID'])} "
+            f"end {int(row['EndID'])} shot {int(row['ShotID'])} | stone {slot + 1}"
+        ),
+        "pre_stones": _row_positions_raw(prev_row),
+        "cond": _row_condition(row),
+        "slot": int(slot),
+    }
+
+
+def _select_real_cases(ds: ValueDataset, test_idx: np.ndarray, rng: np.random.Generator, n: int, early_only: bool):
+    rows = []
+    seen = set()
+    shuffled = np.asarray(test_idx, dtype=np.int64).copy()
+    rng.shuffle(shuffled)
+    for idx in shuffled:
+        row = ds.df.iloc[int(idx)]
+        key = (
+            int(row["CompetitionID"]),
+            int(row["GameID"]),
+            int(row["EndID"]),
+            int(row["ShotID"]),
+        )
+        if key in seen:
+            continue
+        if early_only and float(row["shot_norm"]) > 0.45:
+            continue
+        slot = _find_thrown_slot(ds.df, int(idx))
+        if slot is None:
+            continue
+        case = _real_case(ds, int(idx), slot)
+        if case is not None:
+            rows.append(case)
+            seen.add(key)
+        if len(rows) >= n:
+            break
+    return rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--holdout", type=int, default=23240026)
@@ -192,6 +276,12 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20260509)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out-dir", default=str(ROOT / "figures" / "value_heatmaps"))
+    ap.add_argument(
+        "--case-mode",
+        choices=["real", "mixed_extra"],
+        default="real",
+        help="real: held-out test states; mixed_extra: early real states plus synthetic states",
+    )
     args = ap.parse_args()
 
     device = torch.device(args.device)
@@ -214,25 +304,20 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    selected = []
-    for idx in test_idx:
-        slot = _find_thrown_slot(ds.df, int(idx))
-        if slot is None:
-            continue
-        selected.append((int(idx), slot))
-        if len(selected) >= args.n:
-            break
-    if len(selected) < args.n:
-        raise RuntimeError(f"Only found {len(selected)} plottable states")
+    if args.case_mode == "mixed_extra":
+        cases = _select_real_cases(ds, test_idx, rng, min(3, args.n), early_only=True)
+        while len(cases) < args.n:
+            cases.append(_synthetic_state(rng, len(cases) + 1))
+    else:
+        cases = _select_real_cases(ds, test_idx, rng, args.n, early_only=False)
+    if len(cases) < args.n:
+        raise RuntimeError(f"Only found {len(cases)} plottable states")
 
-    for k, (idx, slot) in enumerate(selected, start=1):
-        row = ds.df.iloc[idx]
-        prev_row = _previous_row(ds.df, idx)
-        if prev_row is None:
-            continue
-        pre_stones_raw = _row_positions_raw(prev_row)
+    for k, case in enumerate(cases, start=1):
+        pre_stones_raw = case["pre_stones"]
+        slot = int(case["slot"])
         xs_m, ys_m, value_delta, pre_value = _candidate_heatmap(
-            model, pre_stones_raw, row, slot, device, args.grid, args.extent_m, 4096
+            model, pre_stones_raw, case["cond"], slot, device, args.grid, args.extent_m, 4096
         )
 
         fig, ax = plt.subplots(figsize=(6.2, 6.8), dpi=180)
@@ -255,15 +340,11 @@ def main() -> None:
         ax.set_ylim(-args.extent_m, args.extent_m)
         ax.set_xlabel("lateral from button (m)")
         ax.set_ylabel("along-sheet from button (m)")
-        ax.set_title(
-            f"Value heatmap | comp {int(row['CompetitionID'])} game {int(row['GameID'])} "
-            f"end {int(row['EndID'])} shot {int(row['ShotID'])} | stone {slot + 1} | Vpre={pre_value:+.2f}",
-            fontsize=9,
-        )
+        ax.set_title(f"{case['title']} | Vpre={pre_value:+.2f}", fontsize=9)
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cb.set_label("predicted value change: V(post) - V(pre)")
         fig.tight_layout()
-        out_path = out_dir / f"value_heatmap_{k:02d}_comp{int(row['CompetitionID'])}_game{int(row['GameID'])}_end{int(row['EndID'])}_shot{int(row['ShotID'])}.png"
+        out_path = out_dir / f"value_heatmap_{k:02d}_{case['label']}.png"
         fig.savefig(out_path)
         plt.close(fig)
         print(out_path)
