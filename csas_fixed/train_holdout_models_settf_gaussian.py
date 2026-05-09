@@ -245,6 +245,7 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         },
     }
     ckpt = {
+        "arch": "set_transformer_gaussian",
         "epoch": best_ep,
         "model_state_dict": best_state,
         "input_dim": real_ds.input_dim,

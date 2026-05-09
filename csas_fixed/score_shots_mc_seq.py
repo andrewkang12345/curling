@@ -607,7 +607,7 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
     # Prefer explicit arch if provided in checkpoint.
     if arch:
         _ensure_ablation_on_path()
-        if arch in {"egnn", "graph_transformer"}:
+        if arch in {"egnn", "graph_transformer", "graph_transformer_gaussian"}:
             from gnn_models import GNN_REGISTRY  # type: ignore
 
             model = GNN_REGISTRY[arch](
@@ -618,16 +618,20 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
                 n_heads=n_heads,
                 dropout=dropout,
             ).to(device)
-        elif arch in {"set_transformer", "settransformer", "value_set_transformer"}:
-            from new_architectures import ValueSetTransformer  # type: ignore
+        elif arch in {"set_transformer", "settransformer", "value_set_transformer", "set_transformer_gaussian"}:
+            from new_architectures import ValueSetTransformer, ValueSetTransformerGaussian  # type: ignore
 
-            model = ValueSetTransformer(
+            model_cls = ValueSetTransformerGaussian if arch == "set_transformer_gaussian" else ValueSetTransformer
+
+            model = model_cls(
                 input_dim=input_dim,
                 cond_dim=cond_dim,
                 hidden_dim=hidden_dim,
                 n_layers=n_layers,
                 n_heads=n_heads,
                 dropout=dropout,
+                min_logvar=float(args_dict.get("min_logvar", -6.0)),
+                max_logvar=float(args_dict.get("max_logvar", 3.5)),
             ).to(device)
         elif arch in {"value_transformer", "transformer"}:
             model = ValueTransformer(
@@ -647,15 +651,19 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
         if "team_embed.weight" in state_keys and "stone_index_embed.weight" not in state_keys:
             # SetTransformer (no stone-index embeddings, has team + inplay embeddings)
             _ensure_ablation_on_path()
-            from new_architectures import ValueSetTransformer  # type: ignore
+            from new_architectures import ValueSetTransformer, ValueSetTransformerGaussian  # type: ignore
 
-            model = ValueSetTransformer(
+            is_gaussian = "mean_head.0.weight" in state_keys and "logvar_head.0.weight" in state_keys
+            model_cls = ValueSetTransformerGaussian if is_gaussian else ValueSetTransformer
+            model = model_cls(
                 input_dim=input_dim,
                 cond_dim=cond_dim,
                 hidden_dim=hidden_dim,
                 n_layers=n_layers,
                 n_heads=n_heads,
                 dropout=dropout,
+                min_logvar=float(args_dict.get("min_logvar", -6.0)),
+                max_logvar=float(args_dict.get("max_logvar", 3.5)),
             ).to(device)
         else:
             model = ValueTransformer(
@@ -690,7 +698,10 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
         x_t = torch.tensor(x_arr, dtype=torch.float32, device=device)
         c_t = torch.tensor(c_arr, dtype=torch.float32, device=device)
         with torch.no_grad():
-            val = model(x_t, c_t).detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
+            out = model(x_t, c_t)
+            if isinstance(out, tuple):
+                out = out[0]
+            val = out.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
         return float(val[0]) if single else val
 
     return predict, cond_dim

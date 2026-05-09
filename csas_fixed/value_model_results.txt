@@ -21,3 +21,13 @@
   test: mse=2.141534 rmse=1.463398 nll=0.819031 mean_sigma=1.482445 median_sigma=1.590979 coverage_1sigma=0.718306 coverage_2sigma=0.965157
   deterministic_graphtf_same_fold: test_mse=2.138082 test_rmse=1.462218
   gaussian_settf_same_fold: test_mse=2.121782 test_rmse=1.456634
+
+2026-05-09 settransformer_gaussian all deterministic holdouts
+  architecture: ValueSetTransformerGaussian, hidden=256, layers=4, heads=4, dropout=0.08
+  objective: MSE(mean, target) + 0.2 * GaussianNLL(mean, logvar, target)
+  selection_key: val_mse + 0.05 * val_nll
+  holdout=0 best_epoch=113 val_mse=2.084000 val_cov1=0.673670 val_cov2=0.955297 test_mse=2.035781 test_rmse=1.426808 test_cov1=0.681901 test_cov2=0.948325
+  holdout=22230015 best_epoch=101 val_mse=2.005528 val_cov1=0.733794 val_cov2=0.939957 test_mse=2.190009 test_rmse=1.479868 test_cov1=0.685945 test_cov2=0.948083
+  holdout=23240026 best_epoch=123 val_mse=2.002659 val_cov1=0.701437 val_cov2=0.958489 test_mse=2.121782 test_rmse=1.456634 test_cov1=0.698338 test_cov2=0.949879
+  holdout=24250026 best_epoch=91 val_mse=1.765756 val_cov1=0.738363 val_cov2=0.968967 test_mse=2.185570 test_rmse=1.478367 test_cov1=0.688235 test_cov2=0.939305
+  scored_reports: holdouts/*/scoring_settf_gaussian and holdouts/*/reports/coach_report{,_mc}/figures/settf_gaussian

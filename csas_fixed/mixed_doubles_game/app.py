@@ -91,9 +91,9 @@ def _sample_noisy_params(intended: np.ndarray, cfg: NoiseConfig, rng: np.random.
     return noisy
 
 
-def _graphtf_checkpoint_map() -> dict[int, Path]:
+def _settf_gaussian_checkpoint_map() -> dict[int, Path]:
     out: dict[int, Path] = {}
-    for split_path in (ROOT_DIR / "holdouts").glob("*/model_graphtf/split_summary.json"):
+    for split_path in (ROOT_DIR / "holdouts").glob("*/model_settf_gaussian/split_summary.json"):
         try:
             data = json.loads(split_path.read_text())
             holdout_comp = int(data["holdout_competition"])
@@ -103,15 +103,15 @@ def _graphtf_checkpoint_map() -> dict[int, Path]:
         except Exception:
             continue
     if not out:
-        raise FileNotFoundError("No GraphTF holdout checkpoints found.")
+        raise FileNotFoundError("No Gaussian SetTransformer holdout checkpoints found.")
     return out
 
 
 @lru_cache(maxsize=8)
 def _load_model_for_competition(competition_id: int):
-    ckpt = _graphtf_checkpoint_map().get(int(competition_id))
+    ckpt = _settf_gaussian_checkpoint_map().get(int(competition_id))
     if ckpt is None:
-        raise FileNotFoundError(f"No GraphTF checkpoint for competition {competition_id}.")
+        raise FileNotFoundError(f"No Gaussian SetTransformer checkpoint for competition {competition_id}.")
     model_fn, _ = load_value_model(ckpt, device=DEFAULT_DEVICE)
     return model_fn, ckpt
 
@@ -243,7 +243,7 @@ class PlayShotRequest(ShotParamsRequest):
 class GameEngine:
     def __init__(self) -> None:
         self.noise = _load_noise_config()
-        self.model_paths = _graphtf_checkpoint_map()
+        self.model_paths = _settf_gaussian_checkpoint_map()
         self.sim_params = contact_mild_params(CurlingParams)
         self.scenario_rows = self._load_real_shot_scenarios()
         self.scenarios = {row["id"]: row for row in self.scenario_rows}
@@ -252,11 +252,11 @@ class GameEngine:
         key_cols = ["CompetitionID", "SessionID", "GameID", "EndID", "ShotID"]
 
         score_frames = []
-        for p in sorted((ROOT_DIR / "holdouts").glob("*/scoring_graphtf/shot_scores_local.csv")):
+        for p in sorted((ROOT_DIR / "holdouts").glob("*/scoring_settf_gaussian/shot_scores_local.csv")):
             df = pd.read_csv(p)
             score_frames.append(df)
         if not score_frames:
-            raise FileNotFoundError("No GraphTF local score files found.")
+            raise FileNotFoundError("No Gaussian SetTransformer local score files found.")
         scores = pd.concat(score_frames, ignore_index=True)
 
         stones = pd.read_csv(ROOT_DIR / "2026" / "Stones.csv")
@@ -268,7 +268,7 @@ class GameEngine:
         merged = scores.merge(stones, on=key_cols + ["TeamID", "PlayerID", "Task", "Handle"], how="inner")
 
         name_frames = []
-        for p in sorted((ROOT_DIR / "holdouts").glob("*/reports/coach_report_mc/shot_scores_local_vs_global_merged_graphtf.csv")):
+        for p in sorted((ROOT_DIR / "holdouts").glob("*/reports/coach_report_mc/shot_scores_local_vs_global_merged_settf_gaussian.csv")):
             df = pd.read_csv(p, usecols=["CompetitionID", "TeamID", "PlayerID", "player_name", "player_label", "team_name"])
             name_frames.append(df.drop_duplicates())
         name_df = pd.concat(name_frames, ignore_index=True).drop_duplicates(
@@ -535,7 +535,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def health() -> dict[str, Any]:
     return {
         "ok": True,
-        "model_arch": "graph_transformer",
+        "model_arch": "set_transformer_gaussian",
         "device": DEFAULT_DEVICE,
         "scenario_count": len(engine.scenario_rows),
         "holdout_models": {str(k): str(v) for k, v in sorted(engine.model_paths.items())},
