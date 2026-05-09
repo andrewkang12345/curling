@@ -31,6 +31,7 @@ MM_PER_RAW = 3.048
 M_PER_RAW = MM_PER_RAW / 1000.0
 STONE_RADIUS_M = 0.145
 HOUSE_RADII_M = [0.1524, 0.6096, 1.2192, 1.8288]
+THROWER_COLOR = "#f2c14e"
 
 
 def _in_play(stones_raw: np.ndarray) -> np.ndarray:
@@ -121,6 +122,35 @@ def _plot_stones(ax, stones_raw: np.ndarray, thrown_slot: int):
         ax.text(x, y, str(i + 1), color=txt, ha="center", va="center", fontsize=7, zorder=4)
 
 
+def _plot_thrower_grid(ax, xs_m: np.ndarray, ys_m: np.ndarray):
+    xx, yy = np.meshgrid(xs_m, ys_m)
+    ax.scatter(
+        xx.ravel(),
+        yy.ravel(),
+        s=10,
+        marker="o",
+        facecolor=THROWER_COLOR,
+        edgecolor="none",
+        alpha=0.36,
+        zorder=2,
+    )
+
+
+def _plot_thrower_original(ax, stones_raw: np.ndarray, thrown_slot: int):
+    xy_m = (stones_raw - BUTTON_RAW) * M_PER_RAW
+    x, y = xy_m[thrown_slot]
+    circ = plt.Circle(
+        (float(x), float(y)),
+        STONE_RADIUS_M,
+        facecolor=THROWER_COLOR,
+        edgecolor="0.05",
+        lw=1.1,
+        zorder=5,
+    )
+    ax.add_patch(circ)
+    ax.text(x, y, str(thrown_slot + 1), color="black", ha="center", va="center", fontsize=7, zorder=6)
+
+
 def _candidate_heatmap(model, row: pd.Series, thrown_slot: int, device: torch.device, grid_n: int, extent_m: float, batch_size: int):
     stones_raw = _row_positions_raw(row)
     cond = _row_condition(row)
@@ -201,7 +231,9 @@ def main() -> None:
             aspect="equal",
         )
         _draw_house(ax)
+        _plot_thrower_grid(ax, xs_m, ys_m)
         _plot_stones(ax, stones_raw, slot)
+        _plot_thrower_original(ax, stones_raw, slot)
         ax.set_xlim(-args.extent_m, args.extent_m)
         ax.set_ylim(-args.extent_m, args.extent_m)
         ax.set_xlabel("lateral from button (m)")
