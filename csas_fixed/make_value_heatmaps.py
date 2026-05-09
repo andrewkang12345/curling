@@ -53,6 +53,10 @@ def _row_condition(row: pd.Series) -> np.ndarray:
     )
 
 
+def _stone_team_name(slot: int) -> str:
+    return "black" if int(slot) >= 6 else "white"
+
+
 def _previous_row(df: pd.DataFrame, row_idx: int) -> pd.Series | None:
     row = df.iloc[row_idx]
     if int(row["ShotID"]) <= 1:
@@ -209,9 +213,10 @@ def _synthetic_state(rng: np.random.Generator, state_idx: int):
         dtype=np.float32,
     )
     label = f"synthetic_{state_idx:02d}"
+    team = _stone_team_name(thrown_slot)
     return {
         "label": label,
-        "title": f"Synthetic state {state_idx} | stone {thrown_slot + 1}",
+        "title": f"Synthetic state {state_idx} | thrower: {team} stone {thrown_slot + 1}",
         "pre_stones": stones,
         "cond": cond,
         "slot": int(thrown_slot),
@@ -223,6 +228,7 @@ def _real_case(ds: ValueDataset, idx: int, slot: int):
     prev_row = _previous_row(ds.df, idx)
     if prev_row is None:
         return None
+    team = _stone_team_name(slot)
     return {
         "label": (
             f"early_comp{int(row['CompetitionID'])}_game{int(row['GameID'])}_"
@@ -230,7 +236,7 @@ def _real_case(ds: ValueDataset, idx: int, slot: int):
         ),
         "title": (
             f"Early test state | comp {int(row['CompetitionID'])} game {int(row['GameID'])} "
-            f"end {int(row['EndID'])} shot {int(row['ShotID'])} | stone {slot + 1}"
+            f"end {int(row['EndID'])} shot {int(row['ShotID'])} | thrower: {team} stone {slot + 1}"
         ),
         "pre_stones": _row_positions_raw(prev_row),
         "cond": _row_condition(row),
