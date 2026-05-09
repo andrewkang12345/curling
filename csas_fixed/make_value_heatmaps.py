@@ -52,9 +52,8 @@ def _row_condition(row: pd.Series) -> np.ndarray:
     )
 
 
-def _find_thrown_slot(df: pd.DataFrame, row_idx: int) -> int | None:
+def _previous_row(df: pd.DataFrame, row_idx: int) -> pd.Series | None:
     row = df.iloc[row_idx]
-    keys = ["CompetitionID", "SessionID", "GameID", "EndID"]
     if int(row["ShotID"]) <= 1:
         return None
 
@@ -67,8 +66,16 @@ def _find_thrown_slot(df: pd.DataFrame, row_idx: int) -> int | None:
     ].sort_values("ShotID")
     if prev.empty:
         return None
+    return prev.iloc[-1]
 
-    prev_stones = _row_positions_raw(prev.iloc[-1])
+
+def _find_thrown_slot(df: pd.DataFrame, row_idx: int) -> int | None:
+    row = df.iloc[row_idx]
+    prev_row = _previous_row(df, row_idx)
+    if prev_row is None:
+        return None
+
+    prev_stones = _row_positions_raw(prev_row)
     curr_stones = _row_positions_raw(row)
     added = np.flatnonzero(_in_play(curr_stones) & ~_in_play(prev_stones))
     if len(added) == 1:
@@ -122,20 +129,6 @@ def _plot_stones(ax, stones_raw: np.ndarray, thrown_slot: int):
         ax.text(x, y, str(i + 1), color=txt, ha="center", va="center", fontsize=7, zorder=4)
 
 
-def _plot_thrower_grid(ax, xs_m: np.ndarray, ys_m: np.ndarray):
-    xx, yy = np.meshgrid(xs_m, ys_m)
-    ax.scatter(
-        xx.ravel(),
-        yy.ravel(),
-        s=10,
-        marker="o",
-        facecolor=THROWER_COLOR,
-        edgecolor="none",
-        alpha=0.36,
-        zorder=2,
-    )
-
-
 def _plot_thrower_original(ax, stones_raw: np.ndarray, thrown_slot: int):
     xy_m = (stones_raw - BUTTON_RAW) * M_PER_RAW
     x, y = xy_m[thrown_slot]
@@ -151,15 +144,31 @@ def _plot_thrower_original(ax, stones_raw: np.ndarray, thrown_slot: int):
     ax.text(x, y, str(thrown_slot + 1), color="black", ha="center", va="center", fontsize=7, zorder=6)
 
 
-def _candidate_heatmap(model, row: pd.Series, thrown_slot: int, device: torch.device, grid_n: int, extent_m: float, batch_size: int):
-    stones_raw = _row_positions_raw(row)
+def _predict_value(model, stones_raw: np.ndarray, cond: np.ndarray, device: torch.device) -> float:
+    x = torch.from_numpy((stones_raw.reshape(1, -1) / POS_MAX).astype(np.float32)).to(device)
+    c = torch.from_numpy(cond.reshape(1, 3)).to(device)
+    with torch.no_grad():
+        return float(model(x, c).detach().cpu().numpy().reshape(-1)[0])
+
+
+def _candidate_heatmap(
+    model,
+    pre_stones_raw: np.ndarray,
+    row: pd.Series,
+    thrown_slot: int,
+    device: torch.device,
+    grid_n: int,
+    extent_m: float,
+    batch_size: int,
+):
     cond = _row_condition(row)
     xs_m = np.linspace(-extent_m, extent_m, grid_n, dtype=np.float32)
     ys_m = np.linspace(-extent_m, extent_m, grid_n, dtype=np.float32)
     xx_m, yy_m = np.meshgrid(xs_m, ys_m)
     points_raw = BUTTON_RAW + np.stack([xx_m.ravel(), yy_m.ravel()], axis=1) / M_PER_RAW
 
-    boards = np.repeat(stones_raw.reshape(1, NUM_STONES, 2), len(points_raw), axis=0)
+    pre_value = _predict_value(model, pre_stones_raw, cond, device)
+    boards = np.repeat(pre_stones_raw.reshape(1, NUM_STONES, 2), len(points_raw), axis=0)
     boards[:, thrown_slot, :] = points_raw
     x = torch.from_numpy((boards.reshape(len(points_raw), -1) / POS_MAX).astype(np.float32))
     c = torch.from_numpy(np.repeat(cond.reshape(1, 3), len(points_raw), axis=0))
@@ -170,8 +179,8 @@ def _candidate_heatmap(model, row: pd.Series, thrown_slot: int, device: torch.de
             xb = x[start : start + batch_size].to(device)
             cb = c[start : start + batch_size].to(device)
             preds.append(model(xb, cb).detach().cpu().numpy().reshape(-1))
-    zz = np.concatenate(preds).reshape(grid_n, grid_n)
-    return xs_m, ys_m, zz
+    post_values = np.concatenate(preds).reshape(grid_n, grid_n)
+    return xs_m, ys_m, post_values - pre_value, pre_value
 
 
 def main() -> None:
@@ -218,21 +227,31 @@ def main() -> None:
 
     for k, (idx, slot) in enumerate(selected, start=1):
         row = ds.df.iloc[idx]
+        prev_row = _previous_row(ds.df, idx)
+        if prev_row is None:
+            continue
         stones_raw = _row_positions_raw(row)
-        xs_m, ys_m, value = _candidate_heatmap(model, row, slot, device, args.grid, args.extent_m, 4096)
+        pre_stones_raw = _row_positions_raw(prev_row)
+        xs_m, ys_m, value_delta, pre_value = _candidate_heatmap(
+            model, pre_stones_raw, row, slot, device, args.grid, args.extent_m, 4096
+        )
 
         fig, ax = plt.subplots(figsize=(6.2, 6.8), dpi=180)
+        lim = float(np.nanmax(np.abs(value_delta)))
+        if not np.isfinite(lim) or lim <= 1e-6:
+            lim = 1.0
         im = ax.imshow(
-            value,
+            value_delta,
             origin="lower",
             extent=[xs_m.min(), xs_m.max(), ys_m.min(), ys_m.max()],
             cmap="coolwarm",
+            vmin=-lim,
+            vmax=lim,
             alpha=0.88,
             aspect="equal",
         )
         _draw_house(ax)
-        _plot_thrower_grid(ax, xs_m, ys_m)
-        _plot_stones(ax, stones_raw, slot)
+        _plot_stones(ax, pre_stones_raw, slot)
         _plot_thrower_original(ax, stones_raw, slot)
         ax.set_xlim(-args.extent_m, args.extent_m)
         ax.set_ylim(-args.extent_m, args.extent_m)
@@ -240,11 +259,11 @@ def main() -> None:
         ax.set_ylabel("along-sheet from button (m)")
         ax.set_title(
             f"Value heatmap | comp {int(row['CompetitionID'])} game {int(row['GameID'])} "
-            f"end {int(row['EndID'])} shot {int(row['ShotID'])} | stone {slot + 1}",
+            f"end {int(row['EndID'])} shot {int(row['ShotID'])} | stone {slot + 1} | Vpre={pre_value:+.2f}",
             fontsize=9,
         )
         cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cb.set_label("predicted end value differential")
+        cb.set_label("predicted value change: V(post) - V(pre)")
         fig.tight_layout()
         out_path = out_dir / f"value_heatmap_{k:02d}_comp{int(row['CompetitionID'])}_game{int(row['GameID'])}_end{int(row['EndID'])}_shot{int(row['ShotID'])}.png"
         fig.savefig(out_path)
