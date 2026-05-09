@@ -162,6 +162,25 @@ def _plot_thrower_original(ax, stones_raw: np.ndarray, thrown_slot: int):
     ax.text(x, y, str(thrown_slot + 1), color="black", ha="center", va="center", fontsize=7, zorder=6)
 
 
+def _plot_observed_throw(ax, observed_stones_raw: np.ndarray | None, thrown_slot: int):
+    if observed_stones_raw is None:
+        return
+    if not _in_play(observed_stones_raw[[thrown_slot]])[0]:
+        return
+    xy_m = (observed_stones_raw - BUTTON_RAW) * M_PER_RAW
+    x, y = xy_m[thrown_slot]
+    circ = plt.Circle(
+        (float(x), float(y)),
+        STONE_RADIUS_M,
+        facecolor=THROWER_COLOR,
+        edgecolor="0.02",
+        lw=1.6,
+        zorder=6,
+    )
+    ax.add_patch(circ)
+    ax.text(x, y, str(thrown_slot + 1), color="black", ha="center", va="center", fontsize=7, weight="bold", zorder=7)
+
+
 def _predict_value(model, stones_raw: np.ndarray, cond: np.ndarray, device: torch.device) -> float:
     x = torch.from_numpy((stones_raw.reshape(1, -1) / POS_MAX).astype(np.float32)).to(device)
     c = torch.from_numpy(cond.reshape(1, 3)).to(device)
@@ -237,6 +256,7 @@ def _synthetic_state(rng: np.random.Generator, state_idx: int):
         "label": label,
         "title": f"Synthetic state {state_idx} | thrower: {team} stone {thrown_slot + 1}",
         "pre_stones": stones,
+        "observed_stones": None,
         "cond": cond,
         "slot": int(thrown_slot),
     }
@@ -258,6 +278,7 @@ def _real_case(ds: ValueDataset, idx: int, slot: int):
             f"end {int(row['EndID'])} shot {int(row['ShotID'])} | thrower: {team} stone {slot + 1}"
         ),
         "pre_stones": _row_positions_raw(prev_row),
+        "observed_stones": _row_positions_raw(row),
         "cond": _row_condition(row),
         "slot": int(slot),
     }
@@ -303,6 +324,7 @@ def main() -> None:
     ap.add_argument("--out-dir", default=str(ROOT / "figures" / "value_heatmaps"))
     ap.add_argument("--model-kind", choices=["graphtf", "settf_gaussian"], default="graphtf")
     ap.add_argument("--checkpoint", default="", help="Optional explicit checkpoint path.")
+    ap.add_argument("--overlay-observed-throw", action="store_true")
     ap.add_argument(
         "--case-mode",
         choices=["real", "mixed_extra"],
@@ -364,6 +386,8 @@ def main() -> None:
         )
         _draw_house(ax)
         _plot_stones(ax, pre_stones_raw, thrown_slot=-1)
+        if args.overlay_observed_throw:
+            _plot_observed_throw(ax, case.get("observed_stones"), slot)
         ax.set_xlim(-args.extent_m, args.extent_m)
         ax.set_ylim(-args.extent_m, args.extent_m)
         ax.set_xlabel("lateral from button (m)")
