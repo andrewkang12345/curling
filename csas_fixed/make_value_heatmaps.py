@@ -230,7 +230,6 @@ def main() -> None:
         prev_row = _previous_row(ds.df, idx)
         if prev_row is None:
             continue
-        stones_raw = _row_positions_raw(row)
         pre_stones_raw = _row_positions_raw(prev_row)
         xs_m, ys_m, value_delta, pre_value = _candidate_heatmap(
             model, pre_stones_raw, row, slot, device, args.grid, args.extent_m, 4096
@@ -251,8 +250,7 @@ def main() -> None:
             aspect="equal",
         )
         _draw_house(ax)
-        _plot_stones(ax, pre_stones_raw, slot)
-        _plot_thrower_original(ax, stones_raw, slot)
+        _plot_stones(ax, pre_stones_raw, thrown_slot=-1)
         ax.set_xlim(-args.extent_m, args.extent_m)
         ax.set_ylim(-args.extent_m, args.extent_m)
         ax.set_xlabel("lateral from button (m)")
