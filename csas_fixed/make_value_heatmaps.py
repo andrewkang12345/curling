@@ -284,7 +284,14 @@ def _real_case(ds: ValueDataset, idx: int, slot: int):
     }
 
 
-def _select_real_cases(ds: ValueDataset, test_idx: np.ndarray, rng: np.random.Generator, n: int, early_only: bool):
+def _select_real_cases(
+    ds: ValueDataset,
+    test_idx: np.ndarray,
+    rng: np.random.Generator,
+    n: int,
+    early_only: bool,
+    max_pre_stones: int | None = None,
+):
     rows = []
     seen = set()
     shuffled = np.asarray(test_idx, dtype=np.int64).copy()
@@ -306,6 +313,8 @@ def _select_real_cases(ds: ValueDataset, test_idx: np.ndarray, rng: np.random.Ge
             continue
         case = _real_case(ds, int(idx), slot)
         if case is not None:
+            if max_pre_stones is not None and int(_in_play(case["pre_stones"]).sum()) > max_pre_stones:
+                continue
             rows.append(case)
             seen.add(key)
         if len(rows) >= n:
@@ -325,6 +334,7 @@ def main() -> None:
     ap.add_argument("--model-kind", choices=["graphtf", "settf_gaussian"], default="graphtf")
     ap.add_argument("--checkpoint", default="", help="Optional explicit checkpoint path.")
     ap.add_argument("--overlay-observed-throw", action="store_true")
+    ap.add_argument("--max-pre-stones", type=int, default=-1, help="Only real cases with this many or fewer prethrow stones.")
     ap.add_argument(
         "--case-mode",
         choices=["real", "mixed_extra"],
@@ -355,11 +365,13 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.case_mode == "mixed_extra":
-        cases = _select_real_cases(ds, test_idx, rng, min(3, args.n), early_only=True)
+        max_pre_stones = args.max_pre_stones if args.max_pre_stones >= 0 else None
+        cases = _select_real_cases(ds, test_idx, rng, min(3, args.n), early_only=True, max_pre_stones=max_pre_stones)
         while len(cases) < args.n:
             cases.append(_synthetic_state(rng, len(cases) + 1))
     else:
-        cases = _select_real_cases(ds, test_idx, rng, args.n, early_only=False)
+        max_pre_stones = args.max_pre_stones if args.max_pre_stones >= 0 else None
+        cases = _select_real_cases(ds, test_idx, rng, args.n, early_only=False, max_pre_stones=max_pre_stones)
     if len(cases) < args.n:
         raise RuntimeError(f"Only found {len(cases)} plottable states")
 
