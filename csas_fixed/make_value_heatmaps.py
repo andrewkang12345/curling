@@ -132,8 +132,6 @@ def _draw_house(ax):
         ax.add_patch(circle)
     button = plt.Circle((0.0, 0.0), STONE_RADIUS_M, fill=False, color="0.25", lw=1.0)
     ax.add_patch(button)
-    ax.axhline(0.0, color="0.85", lw=0.8, zorder=0)
-    ax.axvline(0.0, color="0.85", lw=0.8, zorder=0)
 
 
 def _plot_stones(ax, stones_raw: np.ndarray, thrown_slot: int):
