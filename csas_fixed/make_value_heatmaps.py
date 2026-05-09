@@ -24,6 +24,7 @@ os.environ.setdefault("GNN_RELEASE_NODE_MODE", "three")
 
 from dataset import NUM_STONES, POS_MAX, ValueDataset  # noqa: E402
 from gnn_models import GNN_REGISTRY  # noqa: E402
+from new_architectures import ValueSetTransformerGaussian  # noqa: E402
 from train_holdout_models_cond3 import make_holdout_split  # noqa: E402
 
 BUTTON_RAW = np.array([750.0, 800.0], dtype=np.float32)
@@ -95,17 +96,31 @@ def _find_thrown_slot(df: pd.DataFrame, row_idx: int) -> int | None:
     return None
 
 
-def _load_model(ckpt_path: Path, device: torch.device):
+def _load_model(ckpt_path: Path, device: torch.device, model_kind: str):
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     args = ckpt.get("args", {})
-    model = GNN_REGISTRY["graph_transformer"](
-        input_dim=int(ckpt.get("input_dim", 24)),
-        cond_dim=int(ckpt.get("cond_dim", 3)),
-        hidden_dim=int(ckpt.get("hidden_dim", 256)),
-        n_layers=int(args.get("n_layers", 4)),
-        n_heads=int(args.get("n_heads", 4)),
-        dropout=float(args.get("dropout", 0.1)),
-    ).to(device)
+    if model_kind == "graphtf":
+        model = GNN_REGISTRY["graph_transformer"](
+            input_dim=int(ckpt.get("input_dim", 24)),
+            cond_dim=int(ckpt.get("cond_dim", 3)),
+            hidden_dim=int(ckpt.get("hidden_dim", 256)),
+            n_layers=int(args.get("n_layers", 4)),
+            n_heads=int(args.get("n_heads", 4)),
+            dropout=float(args.get("dropout", 0.1)),
+        ).to(device)
+    elif model_kind == "settf_gaussian":
+        model = ValueSetTransformerGaussian(
+            input_dim=int(ckpt.get("input_dim", 24)),
+            cond_dim=int(ckpt.get("cond_dim", 3)),
+            hidden_dim=int(ckpt.get("hidden_dim", 256)),
+            n_layers=int(args.get("n_layers", 4)),
+            n_heads=int(args.get("n_heads", 4)),
+            dropout=float(args.get("dropout", 0.08)),
+            min_logvar=float(args.get("min_logvar", -6.0)),
+            max_logvar=float(args.get("max_logvar", 3.5)),
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported model kind: {model_kind}")
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
     return model
@@ -153,7 +168,10 @@ def _predict_value(model, stones_raw: np.ndarray, cond: np.ndarray, device: torc
     x = torch.from_numpy((stones_raw.reshape(1, -1) / POS_MAX).astype(np.float32)).to(device)
     c = torch.from_numpy(cond.reshape(1, 3)).to(device)
     with torch.no_grad():
-        return float(model(x, c).detach().cpu().numpy().reshape(-1)[0])
+        out = model(x, c)
+        if isinstance(out, tuple):
+            out = out[0]
+        return float(out.detach().cpu().numpy().reshape(-1)[0])
 
 
 def _candidate_heatmap(
@@ -182,7 +200,10 @@ def _candidate_heatmap(
         for start in range(0, len(x), batch_size):
             xb = x[start : start + batch_size].to(device)
             cb = c[start : start + batch_size].to(device)
-            preds.append(model(xb, cb).detach().cpu().numpy().reshape(-1))
+            out = model(xb, cb)
+            if isinstance(out, tuple):
+                out = out[0]
+            preds.append(out.detach().cpu().numpy().reshape(-1))
     post_values = np.concatenate(preds).reshape(grid_n, grid_n)
     return xs_m, ys_m, post_values - pre_value, pre_value
 
@@ -282,6 +303,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20260509)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out-dir", default=str(ROOT / "figures" / "value_heatmaps"))
+    ap.add_argument("--model-kind", choices=["graphtf", "settf_gaussian"], default="graphtf")
+    ap.add_argument("--checkpoint", default="", help="Optional explicit checkpoint path.")
     ap.add_argument(
         "--case-mode",
         choices=["real", "mixed_extra"],
@@ -305,8 +328,9 @@ def main() -> None:
     test_idx = np.asarray(test_idx, dtype=np.int64)
     rng.shuffle(test_idx)
 
-    ckpt = ROOT / "holdouts" / str(args.holdout) / "model_graphtf" / "model.pt"
-    model = _load_model(ckpt, device)
+    default_subdir = "model_settf_gaussian" if args.model_kind == "settf_gaussian" else "model_graphtf"
+    ckpt = Path(args.checkpoint) if args.checkpoint else ROOT / "holdouts" / str(args.holdout) / default_subdir / "model.pt"
+    model = _load_model(ckpt, device, args.model_kind)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
