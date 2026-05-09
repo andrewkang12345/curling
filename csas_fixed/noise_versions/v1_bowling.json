@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "mode": "local",
+  "model_name": "v1_bowling",
+  "description": "Bowling et al. fitted execution noise: Student-t(nu=5), speed scale 9.5mm/s, aim scale sigma_theta(w) in [1.16e-3, 3.65e-3] rad (larger w -> smaller angular error). Spin/y0 remain explicit guesses because Bowling did not specify them.",
+  "local": {
+    "distribution": "student_t",
+    "nu": 5,
+    "speed_scale": 0.0095,
+    "angle_scale_range": [0.00116, 0.00365],
+    "angle_speed_range": [0.5, 3.0],
+    "std": [0.0123, 0.0030, 0.08, 0.015],
+    "min_std": 0.001,
+    "full_cov": false
+  },
+  "meta": {
+    "params_order": ["est_speed", "est_angle", "est_spin", "est_y0"],
+    "notes": "std[0]=0.0123 is Gaussian-equiv of Student-t(5, scale=0.0095). angle_scale_range is the intended Student-t scale range from Bowling, in radians, and overrides std[1] during sampling. std[2]=0.08 and std[3]=0.015 remain guessed spin/y0 noise because Bowling did not specify them."
+  }
+}

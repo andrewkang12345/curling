@@ -1,0 +1,17 @@
+[Unit]
+Description=Mixed Doubles Curling Game
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/mnt/data/curling2/csas_fixed
+Environment=CURLING_GAME_DEVICE=cpu
+Environment=JAX_PLATFORMS=cpu
+ExecStart=/opt/pytorch/bin/uvicorn mixed_doubles_game.app:app --host 127.0.0.1 --port 8000 --workers 6
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

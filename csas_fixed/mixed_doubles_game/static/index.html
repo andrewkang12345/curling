@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Mixed Doubles Curling Game</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260429a" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Mobile Curling MVP</p>
+          <h1>Mixed Doubles Decision Game</h1>
+          <p class="lede">
+            Pick an intended shot, let the server sample one noisy execution, then see the simulated
+            outcome and resulting value.
+          </p>
+        </div>
+        <button id="randomScenarioBtn" class="ghost-btn" type="button">Random Scenario</button>
+      </section>
+
+      <section class="board-card">
+        <canvas id="sheetCanvas" width="900" height="1480"></canvas>
+        <div class="board-overlay">
+          <div id="scenarioName" class="scenario-name"></div>
+          <div id="scenarioDescription" class="scenario-description"></div>
+        </div>
+      </section>
+
+      <section class="panel-grid">
+        <div class="panel">
+          <label class="field">
+            <span>Scenario</span>
+            <select id="scenarioSelect"></select>
+          </label>
+
+          <label class="field">
+            <span>Speed <strong id="speedValue"></strong></span>
+            <input id="speedInput" type="range" min="0.1" max="3.0" step="0.01" />
+          </label>
+
+          <label class="field">
+            <span>Angle <strong id="angleValue"></strong></span>
+            <input id="angleInput" type="range" min="-0.35" max="0.35" step="0.001" />
+          </label>
+
+          <label class="field">
+            <span>Spin <strong id="spinValue"></strong></span>
+            <input id="spinInput" type="range" min="-3.0" max="3.0" step="0.01" />
+          </label>
+
+          <label class="field">
+            <span>Release Offset <strong id="y0Value"></strong></span>
+            <input id="y0Input" type="range" min="-0.23" max="0.23" step="0.001" />
+          </label>
+
+          <div class="actions">
+            <button id="shootBtn" class="primary-btn" type="button">Throw Shot</button>
+            <button id="resetBtn" class="ghost-btn" type="button">Reset Controls</button>
+          </div>
+        </div>
+
+        <div class="panel results-panel">
+          <h2>Shot Result</h2>
+          <div class="result-grid">
+            <div>
+              <span class="label">Pre-Shot Value</span>
+              <strong id="preValueOut">-</strong>
+            </div>
+            <div>
+              <span class="label">Your Post Value</span>
+              <strong id="valueOut">-</strong>
+            </div>
+            <div>
+              <span class="label">Your DV</span>
+              <strong id="yourDvOut">-</strong>
+            </div>
+            <div>
+              <span class="label">Athlete DV</span>
+              <strong id="athleteDvOut">-</strong>
+            </div>
+            <div>
+              <span class="label">Athlete</span>
+              <strong id="athleteOut">-</strong>
+            </div>
+            <div>
+              <span class="label">Terminal</span>
+              <strong id="terminalOut">-</strong>
+            </div>
+          </div>
+
+          <div class="subpanel">
+            <h3>Intended Shot Preview</h3>
+            <pre id="previewOut">-</pre>
+          </div>
+
+          <div class="subpanel">
+            <h3>Noisy Sample Used</h3>
+            <pre id="sampledParamsOut">-</pre>
+          </div>
+
+          <div class="subpanel">
+            <h3>Model</h3>
+            <pre id="modelOut">-</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=20260429a"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "mode": "local",
+  "model_name": "v3_expert",
+  "description": "Expert-guess noise for elite curling athletes. Speed: ~1.5% of typical delivery (~0.02 m/s). Angle: ~0.8 deg (~0.014 rad). Spin: ~5% of typical range (~0.15 rad/s). Y0: ~8mm release offset. All Gaussian.",
+  "local": {
+    "std": [0.020, 0.014, 0.15, 0.008],
+    "min_std": 0.001,
+    "full_cov": false
+  },
+  "meta": {
+    "params_order": ["est_speed", "est_angle", "est_spin", "est_y0"],
+    "rationale": {
+      "speed": "Elite curlers deliver draws at ~1.1 m/s. 0.020 m/s std means 68% of deliveries within ±2cm/s of intended speed, ~1.8% CV. Takeouts at ~2.2 m/s give ~0.9% CV.",
+      "angle": "0.014 rad = 0.8 deg. At 6.4m hog-to-tee, this is ±9cm lateral error at the tee line from aim alone, consistent with competitive accuracy.",
+      "spin": "Typical rotation 0.5-2.0 rad/s. 0.15 std means ±10% variation in curl trajectory.",
+      "y0": "8mm std in lateral release position. Elite athletes have very consistent release mechanics."
+    }
+  }
+}

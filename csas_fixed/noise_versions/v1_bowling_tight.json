@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "mode": "local",
+  "model_name": "v1_bowling",
+  "description": "Bowling et al. speed/angle with corrected aim scale and conservative guessed spin/y0. Spin reduced from 0.08 to 0.02, y0 from 0.015 to 0.005.",
+  "local": {
+    "distribution": "student_t",
+    "nu": 5,
+    "speed_scale": 0.0095,
+    "angle_scale_range": [
+      0.00116,
+      0.00365
+    ],
+    "angle_speed_range": [
+      0.5,
+      3.0
+    ],
+    "std": [
+      0.0123,
+      0.003,
+      0.02,
+      0.005
+    ],
+    "min_std": 0.001,
+    "full_cov": false
+  },
+  "meta": {
+    "params_order": [
+      "est_speed",
+      "est_angle",
+      "est_spin",
+      "est_y0"
+    ],
+    "notes": "std[0]=0.0123 is Gaussian-equiv of Student-t(5, scale=0.0095). angle_scale_range is the intended Student-t scale range from Bowling, in radians, and overrides std[1] during sampling. std[2]=0.02 and std[3]=0.005 are conservative guessed spin/y0 noise because Bowling did not specify them."
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "mode": "local",
+  "local": {
+    "std": [
+      0.05,
+      0.008,
+      0.12,
+      0.03
+    ],
+    "min_std": 0.001,
+    "full_cov": false
+  },
+  "meta": {
+    "description": "Throw-local counterfactual noise around each inverse center. Intended to preserve intention (tiny variations) rather than task-wide diversity.",
+    "params_order": [
+      "est_speed",
+      "est_angle",
+      "est_spin",
+      "est_y0"
+    ],
+    "units_hint": {
+      "est_speed": "same as inverse solver",
+      "est_angle": "radians",
+      "est_spin": "same as inverse solver",
+      "est_y0": "meters"
+    }
+  }
+}
