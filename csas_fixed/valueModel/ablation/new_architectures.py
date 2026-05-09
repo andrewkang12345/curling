@@ -253,6 +253,69 @@ class ValueSetTransformer(nn.Module):
         return self.value_head(out[:, 0, :])
 
 
+class ValueSetTransformerGaussian(nn.Module):
+    """
+    SetTransformer with a Gaussian value head.
+
+    Returns (mean, log_variance), each shaped (B, 1). This keeps the same
+    permutation-invariant tokenization as ValueSetTransformer but lets downstream
+    search penalize or visualize uncertainty instead of treating every point
+    estimate as equally certain.
+    """
+
+    def __init__(self, input_dim=24, cond_dim=3, hidden_dim=256,
+                 n_layers=4, n_heads=4, dropout=0.1, min_logvar=-6.0, max_logvar=4.0, **kwargs):
+        super().__init__()
+        self.input_dim = input_dim
+        self.cond_dim = cond_dim
+        self.min_logvar = float(min_logvar)
+        self.max_logvar = float(max_logvar)
+        d = hidden_dim
+
+        self.stone_proj = nn.Linear(2, d)
+        self.cond_proj = nn.Linear(cond_dim, d)
+        self.team_embed = nn.Embedding(2, d)
+        self.inplay_embed = nn.Embedding(2, d)
+        self.global_token = nn.Parameter(torch.randn(1, 1, d))
+
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d, nhead=n_heads, dim_feedforward=d * 4,
+            dropout=dropout, batch_first=True, activation="gelu",
+        )
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
+
+        self.mean_head = nn.Sequential(
+            nn.Linear(d, d),
+            nn.GELU(),
+            nn.Linear(d, 1),
+        )
+        self.logvar_head = nn.Sequential(
+            nn.Linear(d, d),
+            nn.GELU(),
+            nn.Linear(d, 1),
+        )
+
+    def forward(self, x, c):
+        B = x.size(0)
+        device = x.device
+
+        stones = x.view(B, NUM_STONES, 2)
+        tokens = self.stone_proj(stones)
+
+        team_ids = torch.zeros(NUM_STONES, dtype=torch.long, device=device)
+        team_ids[6:] = 1
+        tokens = tokens + self.team_embed(team_ids).unsqueeze(0)
+
+        is_inplay = ((stones.sum(dim=-1) > 0.001) & (stones.max(dim=-1).values < 0.999)).long()
+        tokens = tokens + self.inplay_embed(is_inplay)
+
+        global_tok = self.cond_proj(c).unsqueeze(1) + self.global_token.expand(B, -1, -1)
+        out = self.encoder(torch.cat([global_tok, tokens], dim=1))[:, 0, :]
+        mean = self.mean_head(out)
+        logvar = self.logvar_head(out).clamp(self.min_logvar, self.max_logvar)
+        return mean, logvar
+
+
 class ValueSetTransformerMoE(nn.Module):
     """
     SetTransformer encoder with a gated mixture-of-experts value head on the

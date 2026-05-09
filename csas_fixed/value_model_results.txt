@@ -1,0 +1,10 @@
+2026-05-09 settransformer_gaussian holdout=23240026
+  checkpoint: holdouts/23240026/model_settf_gaussian/model.pt
+  architecture: ValueSetTransformerGaussian, hidden=256, layers=4, heads=4, dropout=0.08
+  objective: MSE(mean, target) + 0.2 * GaussianNLL(mean, logvar, target)
+  selection_key: val_mse + 0.05 * val_nll
+  best_epoch: 123
+  val: mse=2.002659 rmse=1.415153 nll=0.710715 mean_sigma=1.382198 median_sigma=1.472216 coverage_1sigma=0.701437 coverage_2sigma=0.958489
+  test: mse=2.121782 rmse=1.456634 nll=0.743404 mean_sigma=1.393186 median_sigma=1.492784 coverage_1sigma=0.698338 coverage_2sigma=0.949879
+  deterministic_settf_same_fold: test_mse=2.121725 test_rmse=1.456614
+  graphtf_same_fold: test_mse=2.138082 test_rmse=1.462218
