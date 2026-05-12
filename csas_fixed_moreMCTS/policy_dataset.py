@@ -52,16 +52,29 @@ def build_policy_tensors(
 
     inverse_glob = inverse_glob or str(fixed_root / "inverse_current" / "stones_with_estimates.chunk*.csv")
     inv = load_inverse_estimates(inverse_glob, max_loss)
-    frame = ds.df.iloc[split_idx].reset_index().rename(columns={"index": "_ds_idx"})
+    group_cols = ["CompetitionID", "SessionID", "GameID", "EndID"]
+    df_with_prev = ds.df.copy()
+    df_with_prev["_prev_ds_idx"] = (
+        pd.Series(df_with_prev.index, index=df_with_prev.index)
+        .groupby([df_with_prev[c] for c in group_cols], sort=False)
+        .shift(1)
+    )
+    frame = df_with_prev.iloc[split_idx].reset_index().rename(columns={"index": "_ds_idx"})
     merged = frame.merge(inv, on=KEY_COLS, how="inner")
+    merged = merged[np.isfinite(merged["_prev_ds_idx"].to_numpy(dtype=np.float64))].copy()
     if merged.empty:
-        raise RuntimeError(f"No policy rows after merging split={split} holdout={holdout} with inverse estimates.")
+        raise RuntimeError(
+            f"No policy rows after merging split={split} holdout={holdout} with inverse estimates and previous states."
+        )
 
     idx = merged["_ds_idx"].to_numpy(dtype=np.int64)
-    x = Xp[idx].float()
+    prev_idx = merged["_prev_ds_idx"].to_numpy(dtype=np.int64)
+    x = Xp[prev_idx].float()
     c = Xc[idx].float()
     y = torch.tensor(merged[ACTION_COLS].to_numpy(dtype=np.float32))
     meta = merged[KEY_COLS + ["TeamID", "ShotIndex", "ShotsInEnd", "hard_loss_refine"]].copy()
+    meta["InputShotID"] = merged["ShotID"].to_numpy()
+    meta["InputStateSource"] = "previous_in_end"
     return x, c, y, Y[idx].float(), meta
 
 
