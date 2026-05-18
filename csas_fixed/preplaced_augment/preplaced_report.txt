@@ -1,0 +1,52 @@
+======================================================================
+PRE-PLACED STONE CLASSIFICATION REPORT (CANONICAL POSITIONS)
+======================================================================
+
+Total ends matched:  2629
+Skipped (no match):  0
+Off-sheet:           8
+Synthetic rows:      2629
+Original rows:       23733
+Augmented total:     26362
+
+MODE BREAKDOWN
+----------------------------------------
+  standard            :  2031
+  pp_right            :   314
+  pp_left             :   284
+  offsheet            :     8
+
+GUARD SLOT OWNERSHIP
+----------------------------------------
+  Slot 1 — team A (stones 1-6): 1322
+  Slot 7 — team B (stones 7-12): 1307
+
+CANONICAL POSITIONS USED (meters, tee = origin)
+----------------------------------------
+  standard:
+    guard:   (-3.4016, 0.0000)
+    inhouse: (0.4572, 0.0000)
+  pp_right:
+    guard:   (-3.4016, 1.0333)
+    inhouse: (-0.1524, 1.2192)
+  pp_left:
+    guard:   (-3.4016, -1.0333)
+    inhouse: (-0.1524, -1.2192)
+
+NOTE: These are rule-defined positions, NOT the post-shot-7
+observed positions. The first thrown shot disturbs the in-house
+stone ~22% of the time, so using post-shot positions would be wrong.
+
+LIMITATIONS
+----------------------------------------
+- Rules allow 3 reference points for Position A (guard), each with
+  front/back = 6 standard layouts. This dataset shows only 1 guard
+  position (x_m=-3.40). Either teams always chose the same ref point,
+  or pixel resolution masks the front/back distinction (~0.29m apart).
+- ~227 PP ends have missing PowerPlay flag in Ends.csv; detected via
+  lateral stone positions (off-center guard or in-house).
+- ~24 ends have center guard + at-tee in-house with no PP flag;
+  classified as standard (guard was likely disturbed by first shot).
+- ~68 ends have guard disturbed far from canonical position.
+
+======================================================================

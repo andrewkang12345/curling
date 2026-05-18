@@ -100,13 +100,22 @@ def _load_model(ckpt_path: Path, device: torch.device, model_kind: str):
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     args = ckpt.get("args", {})
     if model_kind == "graphtf":
-        model = GNN_REGISTRY["graph_transformer"](
+        arch = str(ckpt.get("arch", "graph_transformer"))
+        registry_key = "graph_transformer_gaussian" if arch == "graph_transformer_gaussian" else "graph_transformer"
+        model_kwargs = {}
+        if registry_key == "graph_transformer_gaussian":
+            model_kwargs.update(
+                min_logvar=float(args.get("min_logvar", -6.0)),
+                max_logvar=float(args.get("max_logvar", 3.5)),
+            )
+        model = GNN_REGISTRY[registry_key](
             input_dim=int(ckpt.get("input_dim", 24)),
             cond_dim=int(ckpt.get("cond_dim", 3)),
             hidden_dim=int(ckpt.get("hidden_dim", 256)),
             n_layers=int(args.get("n_layers", 4)),
             n_heads=int(args.get("n_heads", 4)),
             dropout=float(args.get("dropout", 0.1)),
+            **model_kwargs,
         ).to(device)
     elif model_kind == "settf_gaussian":
         model = ValueSetTransformerGaussian(

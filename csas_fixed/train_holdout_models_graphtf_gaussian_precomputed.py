@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train Gaussian Graph Transformer value models for holdout competitions."""
+"""Train Gaussian GraphTF models from precomputed graph tensors."""
 
 from __future__ import annotations
 
@@ -15,19 +15,18 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR / "valueModel"))
 sys.path.insert(0, str(THIS_DIR / "valueModel" / "ablation"))
 
-# Current best GraphTF feature stack: scorability + reachability + product.
 os.environ.setdefault("GNN_EDGE_SCALAR_MODE", "button_visible_plus_release_reach_with_product")
 os.environ.setdefault("GNN_NODE_FEATURE_MODE", "none")
 os.environ.setdefault("GNN_RELEASE_NODE_MODE", "three")
 
 from dataset import ValueDataset, NUM_STONES, POS_MAX  # type: ignore  # noqa: E402
-from gnn_models import GNN_REGISTRY  # type: ignore  # noqa: E402
+from gnn_models import GNN_REGISTRY, build_graph_batch_fast, compute_edge_features_fast  # type: ignore  # noqa: E402
 from train_holdout_models_cond3 import END_KEY, HOLDOUT_IDS, make_holdout_split, materialize, _write_table  # type: ignore  # noqa: E402
 
 FLIP_CENTER_X = 1500.0 / POS_MAX
@@ -45,18 +44,19 @@ def _log(msg: str, log_file: Path | None):
             f.write(msg + "\n")
 
 
-def augment_flip_batch(x: torch.Tensor) -> torch.Tensor:
-    bsz = x.size(0)
-    stones = x.view(bsz, NUM_STONES, 2).clone()
-    flip_mask = (torch.rand(bsz, device=x.device) < 0.5).view(bsz, 1, 1)
+def gaussian_nll(mean: torch.Tensor, logvar: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    return 0.5 * (torch.exp(-logvar) * (y - mean).pow(2) + logvar).mean()
+
+
+def flip_state_batch(x: torch.Tensor) -> torch.Tensor:
+    stones = x.view(x.size(0), NUM_STONES, 2).clone()
     in_play = ((stones.sum(dim=-1) > 0.001) & (stones.max(dim=-1).values < 0.999)).unsqueeze(-1)
     flipped_x = FLIP_CENTER_X - stones[:, :, 0:1]
-    new_x = torch.where(flip_mask & in_play, flipped_x, stones[:, :, 0:1])
-    return torch.cat([new_x, stones[:, :, 1:2]], dim=-1).view(bsz, -1)
+    new_x = torch.where(in_play, flipped_x, stones[:, :, 0:1])
+    return torch.cat([new_x, stones[:, :, 1:2]], dim=-1).view(x.size(0), -1)
 
 
 def team_swap_state_cond_batch(x: torch.Tensor, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Swap stone slot blocks 1-6 and 7-12 while preserving the semantic thrower team."""
     stones = x.view(x.size(0), NUM_STONES, 2)
     swapped = torch.cat([stones[:, 6:12, :], stones[:, 0:6, :]], dim=1).reshape_as(x)
     c_swapped = c.clone()
@@ -65,82 +65,182 @@ def team_swap_state_cond_batch(x: torch.Tensor, c: torch.Tensor) -> tuple[torch.
     return swapped, c_swapped
 
 
-def augment_team_swap_batch(x: torch.Tensor, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    bsz = x.size(0)
-    do_swap = torch.rand(bsz, device=x.device) < 0.5
-    if not bool(do_swap.any()):
-        return x, c
-    out_x = x.clone()
-    out_c = c.clone()
-    out_x[do_swap], out_c[do_swap] = team_swap_state_cond_batch(out_x[do_swap], out_c[do_swap])
-    return out_x, out_c
+class PrecomputedAugmentDataset(Dataset):
+    def __init__(self, caches: list[dict[str, torch.Tensor]]):
+        if not caches:
+            raise ValueError("PrecomputedAugmentDataset requires at least one cache")
+        n = int(caches[0]["y"].shape[0])
+        for cache in caches[1:]:
+            if int(cache["y"].shape[0]) != n:
+                raise ValueError("All augmentation caches must have the same length")
+        self.caches = caches
+        self.n = n
+
+    def __len__(self) -> int:
+        return self.n
+
+    def __getitem__(self, idx: int):
+        aug_idx = int(torch.randint(len(self.caches), (1,)).item())
+        cache = self.caches[aug_idx]
+        return (
+            cache["node_feats"][idx],
+            cache["edge_feats"][idx],
+            cache["node_mask"][idx],
+            cache["c"][idx],
+            cache["y"][idx],
+        )
 
 
-def gaussian_nll(mean: torch.Tensor, logvar: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return 0.5 * (torch.exp(-logvar) * (y - mean).pow(2) + logvar).mean()
+@torch.no_grad()
+def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
+    model.eval()
+    n = 0
+    sum_mse = 0.0
+    sum_nll = 0.0
+    abs_z = []
+    sigma_all = []
+    for node_feats, edge_feats, node_mask, c, y in loader:
+        node_feats = node_feats.to(device, non_blocking=True).float()
+        edge_feats = edge_feats.to(device, non_blocking=True).float()
+        node_mask = node_mask.to(device, non_blocking=True)
+        c = c.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+        mean, logvar = model(node_feats, edge_feats, node_mask, c)
+        mse = F.mse_loss(mean, y, reduction="sum")
+        nll = 0.5 * (torch.exp(-logvar) * (y - mean).pow(2) + logvar).sum()
+        sigma = torch.exp(0.5 * logvar)
+        z = (y - mean).abs() / sigma.clamp(min=1e-6)
+        sum_mse += float(mse.item())
+        sum_nll += float(nll.item())
+        n += int(y.numel())
+        abs_z.append(z.detach().cpu())
+        sigma_all.append(sigma.detach().cpu())
+    abs_z = torch.cat(abs_z, dim=0)
+    sigma_all = torch.cat(sigma_all, dim=0)
+    return {
+        "mse": sum_mse / max(1, n),
+        "rmse": (sum_mse / max(1, n)) ** 0.5,
+        "nll": sum_nll / max(1, n),
+        "coverage_1sigma": float((abs_z <= 1.0).float().mean().item()),
+        "coverage_2sigma": float((abs_z <= 2.0).float().mean().item()),
+        "mean_sigma": float(sigma_all.mean().item()),
+        "median_sigma": float(sigma_all.median().item()),
+    }
 
 
-def _checkpoint_payload(
-    args,
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer | None,
-    real_ds,
-    epoch: int,
-    best_epoch: int,
-    best_val_key: float,
-    val_metrics: dict[str, float] | None,
-    split_info: dict | None = None,
-) -> dict:
-    payload = {
-        "arch": "graph_transformer_gaussian",
+@torch.no_grad()
+def _precompute_graph_tensors(
+    x: torch.Tensor,
+    c: torch.Tensor,
+    y: torch.Tensor,
+    device: torch.device,
+    batch_size: int,
+) -> dict[str, torch.Tensor]:
+    node_feats_all = []
+    edge_feats_all = []
+    node_mask_all = []
+    for start in range(0, x.shape[0], batch_size):
+        xb = x[start:start + batch_size].to(device, non_blocking=True)
+        cb = c[start:start + batch_size].to(device, non_blocking=True)
+        node_feats, node_coords, node_mask, _n = build_graph_batch_fast(xb, device)
+        edge_feats = compute_edge_features_fast(node_coords, node_feats, node_mask, c=cb)
+        node_feats_all.append(node_feats.cpu().to(torch.float16))
+        edge_feats_all.append(edge_feats.cpu().to(torch.float16))
+        node_mask_all.append(node_mask.cpu())
+    return {
+        "node_feats": torch.cat(node_feats_all, dim=0),
+        "edge_feats": torch.cat(edge_feats_all, dim=0),
+        "node_mask": torch.cat(node_mask_all, dim=0),
+        "c": c.clone().cpu(),
+        "y": y.clone().cpu(),
+    }
+
+
+def _load_or_build_cache(
+    cache_path: Path,
+    x: torch.Tensor,
+    c: torch.Tensor,
+    y: torch.Tensor,
+    device: torch.device,
+    batch_size: int,
+    force_rebuild: bool,
+    log_path: Path | None,
+) -> dict[str, torch.Tensor]:
+    if cache_path.exists() and not force_rebuild:
+        _log(f"Loading cache: {cache_path}", log_path)
+        return torch.load(cache_path, map_location="cpu")
+    _log(f"Building cache: {cache_path}", log_path)
+    t0 = time.time()
+    cache = _precompute_graph_tensors(x, c, y, device, batch_size)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(cache, cache_path)
+    _log(f"Built cache in {time.time() - t0:.1f}s: {cache_path}", log_path)
+    return cache
+
+
+def _train_augmented_caches(
+    cache_dir: Path,
+    x: torch.Tensor,
+    c: torch.Tensor,
+    y: torch.Tensor,
+    device: torch.device,
+    batch_size: int,
+    force_rebuild: bool,
+    use_flip: bool,
+    use_team_swap: bool,
+    log_path: Path | None,
+) -> tuple[list[dict[str, torch.Tensor]], list[str]]:
+    variant_names: list[str] = ["orig"]
+    variants: list[tuple[str, torch.Tensor, torch.Tensor]] = [("orig", x, c)]
+    if use_flip:
+        variants.append(("flip", flip_state_batch(x), c))
+        variant_names.append("flip")
+    if use_team_swap:
+        swap_x, swap_c = team_swap_state_cond_batch(x, c)
+        variants.append(("swap", swap_x, swap_c))
+        variant_names.append("swap")
+    if use_flip and use_team_swap:
+        flip_swap_x, flip_swap_c = team_swap_state_cond_batch(flip_state_batch(x), c)
+        variants.append(("flip_swap", flip_swap_x, flip_swap_c))
+        variant_names.append("flip_swap")
+
+    caches = []
+    for name, x_var, c_var in variants:
+        caches.append(
+            _load_or_build_cache(
+                cache_dir / f"train_cache_{name}.pt",
+                x_var,
+                c_var,
+                y,
+                device,
+                batch_size,
+                force_rebuild,
+                log_path,
+            )
+        )
+    return caches, variant_names
+
+
+def _checkpoint_payload(args, model, optimizer, real_ds, epoch, best_epoch, best_val_key, val_metrics):
+    return {
+        "arch": "graph_transformer_gaussian_precomputed",
         "epoch": int(epoch),
         "best_epoch": int(best_epoch),
         "best_val_key": float(best_val_key),
-        "model_state_dict": {k: v.detach().cpu().clone() for k, v in _unwrap_model(model).state_dict().items()},
-        "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+        "val_metrics": val_metrics,
+        "model_state_dict": _unwrap_model(model).state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
         "input_dim": int(real_ds.input_dim),
         "cond_dim": int(real_ds.cond_dim),
         "hidden_dim": int(args.hidden_dim),
         "num_stones": int(NUM_STONES),
-        "model_class": "ValueGraphTransformerGaussianFast",
-        "val_metrics": val_metrics,
-        "split_info": split_info,
+        "model_class": "ValueGraphTransformerGaussianPrecomputed",
         "args": vars(args),
         "graph_feature_env": {
             "GNN_EDGE_SCALAR_MODE": os.environ.get("GNN_EDGE_SCALAR_MODE"),
             "GNN_NODE_FEATURE_MODE": os.environ.get("GNN_NODE_FEATURE_MODE"),
             "GNN_RELEASE_NODE_MODE": os.environ.get("GNN_RELEASE_NODE_MODE"),
         },
-    }
-    return payload
-
-
-@torch.no_grad()
-def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
-    model.eval()
-    preds, logvars, ys = [], [], []
-    for x, c, y in loader:
-        x = x.to(device, non_blocking=True)
-        c = c.to(device, non_blocking=True)
-        mean, logvar = model(x, c)
-        preds.append(mean.cpu())
-        logvars.append(logvar.cpu())
-        ys.append(y.cpu())
-    mean = torch.cat(preds, 0)
-    logvar = torch.cat(logvars, 0)
-    y = torch.cat(ys, 0)
-    mse = F.mse_loss(mean, y).item()
-    nll = gaussian_nll(mean, logvar, y).item()
-    sigma = torch.exp(0.5 * logvar)
-    abs_err = (y - mean).abs()
-    return {
-        "mse": float(mse),
-        "rmse": float(np.sqrt(mse)),
-        "nll": float(nll),
-        "mean_sigma": float(sigma.mean().item()),
-        "median_sigma": float(sigma.median().item()),
-        "coverage_1sigma": float((abs_err <= sigma).float().mean().item()),
-        "coverage_2sigma": float((abs_err <= 2.0 * sigma).float().mean().item()),
     }
 
 
@@ -161,7 +261,7 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         f"GNN_NODE_FEATURE_MODE={os.environ.get('GNN_NODE_FEATURE_MODE')} "
         f"GNN_RELEASE_NODE_MODE={os.environ.get('GNN_RELEASE_NODE_MODE')} "
         f"augment_flip={not args.no_augment_flip} "
-        f"augment_team_swap={not args.no_augment_team_swap}",
+        f"augment_team_swap={not args.no_augment_team_swap} (precomputed path)",
         log_path,
     )
 
@@ -176,12 +276,39 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
     tr_Xp = torch.cat([real_Xp[train_idx], synth_Xp[synth_idx]], 0) if len(synth_idx) else real_Xp[train_idx]
     tr_Xc = torch.cat([real_Xc[train_idx], synth_Xc[synth_idx]], 0) if len(synth_idx) else real_Xc[train_idx]
     tr_Y = torch.cat([real_Y[train_idx], synth_Y[synth_idx]], 0) if len(synth_idx) else real_Y[train_idx]
+    va_Xp, va_Xc, va_Y = real_Xp[val_idx], real_Xc[val_idx], real_Y[val_idx]
+    te_Xp, te_Xc, te_Y = real_Xp[test_idx], real_Xc[test_idx], real_Y[test_idx]
 
-    train_td = TensorDataset(tr_Xp, tr_Xc, tr_Y)
-    val_td = TensorDataset(real_Xp[val_idx], real_Xc[val_idx], real_Y[val_idx])
-    test_td = TensorDataset(real_Xp[test_idx], real_Xc[test_idx], real_Y[test_idx])
     _log(f"Real split sizes | train={len(train_idx)} val={len(val_idx)} test={len(test_idx)}", log_path)
-    _log(f"Train+synth size={len(train_td)} (synth_used={len(synth_idx)})", log_path)
+    _log(f"Train+synth size={tr_Xp.shape[0]} (synth_used={len(synth_idx)})", log_path)
+
+    cache_dir = out_dir / "cache"
+    train_caches, train_variants = _train_augmented_caches(
+        cache_dir,
+        tr_Xp,
+        tr_Xc,
+        tr_Y,
+        device,
+        args.cache_batch_size,
+        args.rebuild_cache,
+        use_flip=not args.no_augment_flip,
+        use_team_swap=not args.no_augment_team_swap,
+        log_path=log_path,
+    )
+    val_cache = _load_or_build_cache(
+        cache_dir / "val_cache.pt", va_Xp, va_Xc, va_Y, device, args.cache_batch_size, args.rebuild_cache, log_path
+    )
+    test_cache = _load_or_build_cache(
+        cache_dir / "test_cache.pt", te_Xp, te_Xc, te_Y, device, args.cache_batch_size, args.rebuild_cache, log_path
+    )
+
+    train_td = PrecomputedAugmentDataset(train_caches)
+    val_td = TensorDataset(
+        val_cache["node_feats"], val_cache["edge_feats"], val_cache["node_mask"], val_cache["c"], val_cache["y"]
+    )
+    test_td = TensorDataset(
+        test_cache["node_feats"], test_cache["edge_feats"], test_cache["node_mask"], test_cache["c"], test_cache["y"]
+    )
 
     cfg = dict(
         hidden_dim=args.hidden_dim,
@@ -191,7 +318,7 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         min_logvar=args.min_logvar,
         max_logvar=args.max_logvar,
     )
-    model = GNN_REGISTRY["graph_transformer_gaussian"](
+    model = GNN_REGISTRY["graph_transformer_gaussian_precomputed"](
         input_dim=real_ds.input_dim,
         cond_dim=real_ds.cond_dim,
         **cfg,
@@ -215,13 +342,11 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
     best_key = float("inf")
     best_ep = 0
     best_state = None
-    best_val_metrics = None
     no_imp = 0
     start_ep = 1
 
     if args.resume:
         last_path = out_dir / "last.pt"
-        best_path = out_dir / "best.pt"
         if not last_path.exists():
             raise FileNotFoundError(f"--resume requested but missing {last_path}")
         last_ckpt = torch.load(last_path, map_location=device)
@@ -231,21 +356,8 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         start_ep = int(last_ckpt.get("epoch", 0)) + 1
         best_key = float(last_ckpt.get("best_val_key", float("inf")))
         best_ep = int(last_ckpt.get("best_epoch", 0))
-        if best_path.exists():
-            best_ckpt = torch.load(best_path, map_location="cpu")
-            best_state = {k: v.detach().cpu().clone() for k, v in best_ckpt["model_state_dict"].items()}
-            best_val_metrics = best_ckpt.get("val_metrics")
-            best_key = float(best_ckpt.get("best_val_key", best_key))
-            best_ep = int(best_ckpt.get("best_epoch", best_ep))
-        else:
-            best_state = {k: v.detach().cpu().clone() for k, v in _unwrap_model(model).state_dict().items()}
-            best_val_metrics = last_ckpt.get("val_metrics")
+        best_state = {k: v.detach().cpu().clone() for k, v in _unwrap_model(model).state_dict().items()}
         no_imp = max(0, int(last_ckpt.get("epoch", 0)) - int(best_ep))
-        _log(
-            f"Resumed from {last_path} at epoch {start_ep}; "
-            f"best_key={best_key:.6f}@{best_ep}; no_imp={no_imp}",
-            log_path,
-        )
 
     for ep in range(start_ep, args.epochs + 1):
         t0 = time.time()
@@ -254,23 +366,21 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         running_mse = 0.0
         running_nll = 0.0
         count = 0
-        for x, c, y in train_loader:
-            x = x.to(device, non_blocking=True)
+        for node_feats, edge_feats, node_mask, c, y in train_loader:
+            node_feats = node_feats.to(device, non_blocking=True).float()
+            edge_feats = edge_feats.to(device, non_blocking=True).float()
+            node_mask = node_mask.to(device, non_blocking=True)
             c = c.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
-            if not args.no_augment_flip:
-                x = augment_flip_batch(x)
-            if not args.no_augment_team_swap:
-                x, c = augment_team_swap_batch(x, c)
             optimizer.zero_grad(set_to_none=True)
-            mean, logvar = model(x, c)
+            mean, logvar = model(node_feats, edge_feats, node_mask, c)
             mse = F.mse_loss(mean, y)
             nll = gaussian_nll(mean, logvar, y)
             loss = mse + args.nll_weight * nll
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            bsz = x.size(0)
+            bsz = y.size(0)
             running_loss += loss.item() * bsz
             running_mse += mse.item() * bsz
             running_nll += nll.item() * bsz
@@ -282,7 +392,6 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
             best_key = val_key
             best_ep = ep
             best_state = {k: v.detach().cpu().clone() for k, v in _unwrap_model(model).state_dict().items()}
-            best_val_metrics = val_metrics
             torch.save(
                 _checkpoint_payload(args, model, optimizer, real_ds, ep, best_ep, best_key, val_metrics),
                 out_dir / "best.pt",
@@ -356,16 +465,21 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
             "GNN_NODE_FEATURE_MODE": os.environ.get("GNN_NODE_FEATURE_MODE"),
             "GNN_RELEASE_NODE_MODE": os.environ.get("GNN_RELEASE_NODE_MODE"),
         },
+        "cache": {
+            "cache_batch_size": int(args.cache_batch_size),
+            "dtype": "float16",
+            "train_variants": train_variants,
+        },
     }
     ckpt = {
-        "arch": "graph_transformer_gaussian",
+        "arch": "graph_transformer_gaussian_precomputed",
         "epoch": int(best_ep),
         "model_state_dict": best_state,
         "input_dim": int(real_ds.input_dim),
         "cond_dim": int(real_ds.cond_dim),
         "hidden_dim": int(args.hidden_dim),
         "num_stones": int(NUM_STONES),
-        "model_class": "ValueGraphTransformerGaussianFast",
+        "model_class": "ValueGraphTransformerGaussianPrecomputed",
         "split_info": split_info,
         "args": vars(args),
     }
@@ -397,7 +511,9 @@ def main() -> None:
     ap.add_argument("--split_seed", type=int, default=123)
     ap.add_argument("--synth_frac", type=float, default=0.50)
     ap.add_argument("--synth_seed", type=int, default=42)
-    ap.add_argument("--out_subdir", default="model_graphtf_gaussian")
+    ap.add_argument("--out_subdir", default="model_graphtf_gaussian_precomputed")
+    ap.add_argument("--cache_batch_size", type=int, default=256)
+    ap.add_argument("--rebuild_cache", action="store_true")
     ap.add_argument("--log_every", type=int, default=10)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--data_parallel", action="store_true")

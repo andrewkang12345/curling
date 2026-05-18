@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Curling Throw Quiz</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Gaussian SetTransformer trainer</p>
+          <h1>Pick the best throw from three near-optimal choices.</h1>
+          <p class="lede">
+            Each card is a pre-selected throw. Before choosing, the sheet shows the intended mean paths.
+            After choosing, the app samples execution noise, animates the thrown stone, and reveals decision and execution value.
+          </p>
+        </div>
+        <button id="randomBtn" class="secondary">Random scenario</button>
+      </section>
+
+      <section class="game">
+        <div class="board-panel">
+          <canvas id="sheet" width="720" height="2200" aria-label="Curling sheet visualization"></canvas>
+          <div class="status-row">
+            <span id="scenarioText">Loading scenario...</span>
+            <button id="nextBtn">Next scenario</button>
+          </div>
+        </div>
+
+        <aside class="side-panel">
+          <div class="scenario-card">
+            <p class="eyebrow">Scenario</p>
+            <h2 id="scenarioName">Loading</h2>
+            <p id="scenarioDesc"></p>
+            <div class="meta-grid">
+              <div>
+                <span>Throwing team</span>
+                <strong id="throwingTeam">-</strong>
+              </div>
+              <div>
+                <span>Pre value</span>
+                <strong id="preValue">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="result-card hidden" id="resultCard">
+            <p class="eyebrow">Result</p>
+            <div class="result-grid">
+              <div>
+                <span>Decision value</span>
+                <strong id="decisionValue">-</strong>
+              </div>
+              <div>
+                <span>Execution value</span>
+                <strong id="executionValue">-</strong>
+              </div>
+              <div>
+                <span>Choice rank</span>
+                <strong id="choiceRank">-</strong>
+              </div>
+              <div>
+                <span>Best option</span>
+                <strong id="bestOption">-</strong>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section>
+        <div class="option-row" id="optionRow"></div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
