@@ -1315,6 +1315,50 @@ this scale is weak evidence (same asymmetry as EXP-050); a positive is a positiv
 
 **Status.** Collection launched 2026-07-27. Raw eval aggregates are auto-appended by the
 chain script on completion; verdict + draw-level ±SE finalised by hand below.
+---
+
+## EXP-053 / depth certification — IS SEARCH DEPTH A LEVER? (Phase 0, no training) — IN FLIGHT 2026-07-27
+
+**Motivation.** az_v7/EXP-029's "operator depth is not the lever" conclusion is unsound by
+today's standards: 60 sims for a 3-ply tree (~1 visit at depth 3), value-head leaves (search
+can't out-know its own V), no per-node noise robustness, no significance gating, no
+operator-as-player certification, unconditional promotion. Depth was never retested with the
+sound machinery (az_v12 screening, EXP-037 gating, incumbent gate). Post-EXP-050 (same-operator
+data at 3x = null), a deeper operator is the leading "qualitatively different data" candidate.
+EXP-052 collection PAUSED mid-round-1 for this (user directive; nothing lost, resumable).
+
+**New machinery.**
+- CRN (common random numbers) in `LocalNoise.sample_batch(crn=True)`: same underlying
+  standard-t draws across candidates (per-candidate scale mapping preserved) -> paired
+  candidate comparisons; verified spin/y0/speed offsets identical, angle correlated >0.999.
+- `world/search/beam.py`: `screen_beam_choose` — depth-3 recursive screen-beam, minimax
+  backup on the deterministic spine, value-free terminal-MC leaves, CRN screens
+  (root 48-cand robust screen -> top 6; opponent 16x8 -> 3 most dangerous; our 12x8 reply;
+  opponent re-picks under the deeper estimate). Illegal interior throws need no masking —
+  forfeit semantics make them self-penalising. Plus `screen_tree_choose` = the exact d2
+  collection operator as a callable.
+
+**Design** (`scripts/exp053_depth_cert.py`, 4 shards, resumable JSONL): 40 val roots per
+horizon h in {4,6,8,10} (preplaced at h10). Per ply, three choosers on identical states:
+d2 (exp_037 knobs), d2p (COMPUTE-MATCHED control: stage-1 k_ego 48 + 128 tree sims ~= d3's
+~2.9k rollout chains), d3 (beam). Disagreements (noise-normalised action distance dn > 2.5)
+adjudicated by (a) paired terminal-MC k=64 CRN [secondary; biased toward behavior-policy
+continuations] and (b) paired GUIDED PLAYOUTS T=8 [primary]: end played out from each action
+with the deployed champion (az_v14d WorldPlayer, robust selection) moving BOTH sides, common
+noise streams across branches. Runs under the NEW rules (stack default).
+
+**Pre-registered.** PRIMARY: among playout-RESOLVED (|Δ|>2SE) d3-vs-d2p disagreements, d3's
+win fraction; depth is certified a lever iff d3 > d2p at binomial p<0.05 AND the d3-vs-d2
+comparison agrees in direction. If d3 only beats d2 but NOT compute-matched d2p, the gain is
+budget, not depth (spend it on wider screens instead). Null -> depth dead at this
+branching/noise level; the amortised latent-tree route becomes the only depth path.
+Secondary: disagreement rates and per-horizon strata (expect depth to matter mid-end, h 4-8);
+mean adjudicated Δ/end as the effect-size estimate for a Phase-1 retrain decision.
+
+**Caveats.** Guided playouts use the OLD-rules-trained champion as the continuation policy
+under NEW rules — symmetric across branches, so pairwise adjudication stays fair; absolute
+Δ magnitudes carry that caveat. Root proposals come from the same exported champion policy
+for all three operators (cancels).
 
 
 ## Template for a new entry

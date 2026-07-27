@@ -221,7 +221,8 @@ def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, ro
 
 def score_candidates_terminal(policy, amean_t, astd_t, x, c, cands, horizon, sie,
                               perspective_block, device, rng, noise, temp, std_scale,
-                              value_model=None, n_search=1, k_ego=1, return_std=False):
+                              value_model=None, n_search=1, k_ego=1, return_std=False,
+                              crn=False):
     """Q[i] = realized terminal end-margin (root persp) of playing candidate i then rolling to
     terminal. EXP-014: ``n_search>1`` + ``value_model`` -> value-greedy (searched) rollout; ``k_ego>1``
     + noise -> 1-ply-robust (mean over k_ego noisy executions of each candidate). Det posts returned
@@ -230,7 +231,7 @@ def score_candidates_terminal(policy, amean_t, astd_t, x, c, cands, horizon, sie
     C = len(cands)
     nc = env_bridge.next_condition(c, sie)
     ke = int(k_ego) if (noise is not None and k_ego > 1) else 1
-    realized = noise.sample_batch(cands, ke).reshape(-1, 4) if noise is not None else cands
+    realized = noise.sample_batch(cands, ke, crn=crn).reshape(-1, 4) if noise is not None else cands
     posts_all, illegal_all = env_bridge.apply_legality(x, env_bridge.simulate(x, c, realized), horizon, c)
     q_all = _mc_rollout_terminal_batch(policy, amean_t, astd_t, posts_all, nc, horizon - 1, sie,
                                        perspective_block, device, rng, noise, temp, std_scale,
