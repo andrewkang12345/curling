@@ -317,11 +317,10 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
 
     tgt = None if target is None else np.asarray(target, dtype=np.float32)
 
-    # In this world stones driven through the back are NOT deleted -- they stay
-    # in play parked behind the house (the training convention). "Remove" here
-    # therefore means: spent -- literally off-grid OR carried clearly through
-    # the back, past the whole house, where it can no longer score.
-    BACK_CLEAR = 2.44
+    # Real takeout rules (boundary removal ON): a removed stone simply
+    # disappears from the post state, so "removed" == gone. The shaping term
+    # rewards pushing the victim toward the back line when removal fails.
+    BACK_LINE = 1.974
 
     def loss(posts_):
         f_hit = _final_compact(posts_, int(stone_slot))
@@ -329,12 +328,11 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
         f_safe = np.nan_to_num(f_hit, nan=0.0)
         moved = np.linalg.norm(f_safe - hit_pos[None], axis=1)
         if remove:
-            cleared = gone | (f_safe[:, 0] >= BACK_CLEAR)
-            l = np.where(cleared, 0.0, 1.0 + np.maximum(0.0, BACK_CLEAR - f_safe[:, 0]))
-            l = l + np.where(~cleared & (moved < 0.05), 2.0, 0.0)
-            # tie-break: prefer the shooter to stay in a scoring-relevant spot
-            f_thr = np.nan_to_num(_final_compact(posts_, thrown), nan=99.0)
-            l = l + np.where(cleared & (f_thr[:, 0] >= 1.974), 0.25, 0.0)
+            l = np.where(gone, 0.0, 1.0 + np.maximum(0.0, BACK_LINE - f_safe[:, 0]))
+            l = l + np.where(~gone & (moved < 0.05), 2.0, 0.0)
+            # tie-break among removals: prefer the shooter to STAY in play
+            f_thr = _final_compact(posts_, thrown)
+            l = l + np.where(gone & ~np.isfinite(f_thr).all(axis=1), 0.25, 0.0)
             return l
         # target mode: distance of the struck stone to its target; losing the
         # stone or never touching it are both bad
@@ -347,7 +345,7 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
     a, l = _cem_refine(x, c, seed_a, loss, iters=3, pop=96,
                        rng=np.random.default_rng(seed))
     final = _final_compact(_simulate_real(x, c, a[None]), int(stone_slot))[0]
-    final_desc = "off_grid" if not np.isfinite(final).all() else \
+    final_desc = "removed" if not np.isfinite(final).all() else \
         [round(float(final[0]), 3), round(float(final[1]), 3)]
     info: Dict[str, Any] = {"stone_slot": int(stone_slot), "stone_final": final_desc}
     if remove:

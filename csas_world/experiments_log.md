@@ -1255,7 +1255,9 @@ stones driven through the back are NOT removed — `in_play` masks stones only o
 the raw grid — so takeouts park victims behind the house ("spent" zone) and the
 early-takeout forfeit fires only on literal off-grid removals. The arena keeps
 these semantics exactly (match outcomes are byte-identical to the eval harness
-transition). Matches persist as JSON logs (intended vs realized actions, per-throw
+transition). **[Superseded 2026-07-27: the user flipped the stack default to real
+takeout rules — see the EXP-052 addendum. The historical convention is now opt-in via
+WORLD_BOUNDARY_REMOVAL=0.]** Matches persist as JSON logs (intended vs realized actions, per-throw
 champion evals). Power-play window: champion waits at an end's first throw while a
 human/agent hammer side may still call its power play. `bash arena/run.sh 8020`.
 ---
@@ -1298,6 +1300,18 @@ transitions (representation-level only); human value anchor (0.10) is real-curli
 consistent with the NEW rules, arguably a better anchor here than in every prior run.
 Corpus scale ~6k records is az_v9-iteration scale, below the EXP-050 3× corpus — a null at
 this scale is weak evidence (same asymmetry as EXP-050); a positive is a positive.
+
+**Addendum (2026-07-27, later).** User directive: the NEW rules are now the STANDARD.
+- `WORLD_BOUNDARY_REMOVAL` default flipped to ON in env_bridge (opt-out `=0`). Every future
+  collection/training/eval runs real takeout rules unless explicitly opted out. All certified
+  numbers up to az_v14d / EXP-050 are OLD-rules numbers — never compare across the flip.
+- The arena switched to the new rules immediately (az_v14d still the resident champion until
+  EXP-052 resolves; both sides play the same environment, so matches stay fair).
+- The in-flight chain script could not be edited (bash reads scripts lazily); its "old-rules"
+  eval draw merely unset the env var, which now means NEW rules — so a placeholder
+  `eval_out/az_v19_newrules/oldrules_run1/summary.json` makes the chain SKIP that draw, and the
+  true old-rules regression draw must be run manually with `WORLD_BOUNDARY_REMOVAL=0` after
+  training completes. Collection itself is unaffected (workers carry the flag explicitly).
 
 **Status.** Collection launched 2026-07-27. Raw eval aggregates are auto-appended by the
 chain script on completion; verdict + draw-level ±SE finalised by hand below.

@@ -23,16 +23,19 @@ STATE_DIM = NUM_STONES * 2  # 24
 COND_DIM = 3
 
 # --------------------------------------------------------------------------- #
-# Optional real-curling boundary removal (EXP-052, WORLD_BOUNDARY_REMOVAL=1)
+# Real-curling boundary removal — DEFAULT ON since 2026-07-27 (EXP-052 era).
 #
-# Default (off) keeps the historical training convention: the raw data grid's
-# in-play mask almost never removes stones, so takeout victims park "spent"
-# behind the house. With the flag ON, every simulator transition additionally
-# removes stones whose final CENTER is fully past the back line, or that touch
-# a side board — which also makes the early-takeout legality rule bind the way
-# real mixed-doubles rules intend. Short (hogged) stones are unchanged.
+# Every simulator transition removes stones whose final CENTER is fully past
+# the back line, or that touch a side board — which also makes the
+# early-takeout legality rule bind the way real mixed-doubles rules intend.
+# Short (hogged) stones are unchanged.
+#
+# Set WORLD_BOUNDARY_REMOVAL=0 to reproduce the HISTORICAL convention (the raw
+# data grid's in-play mask almost never removed stones; takeout victims parked
+# "spent" behind the house). All certified numbers up to and including az_v14d
+# / EXP-050 were produced under the historical convention.
 # --------------------------------------------------------------------------- #
-BOUNDARY_REMOVAL = str(os.environ.get("WORLD_BOUNDARY_REMOVAL", "")).lower() in ("1", "true", "yes")
+BOUNDARY_REMOVAL = str(os.environ.get("WORLD_BOUNDARY_REMOVAL", "1")).lower() not in ("0", "false", "no")
 BACK_LINE_REMOVE_M = 1.829 + 0.145   # back line tangent to the house + stone radius
 SIDE_REMOVE_M = 2.375 - 0.145        # sheet half-width minus stone radius
 

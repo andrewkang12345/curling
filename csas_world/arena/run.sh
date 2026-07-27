@@ -6,6 +6,7 @@ PORT="${1:-8020}"
 
 export PYTHONPATH="src:${CSAS_V3_SRC:-/mnt/data/curling2/csas_v3/src}"
 export JAX_PLATFORMS=cpu
+export WORLD_BOUNDARY_REMOVAL=1   # real takeout rules (explicit; also the stack default)
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # GraphTF feature modes used by every csas_world training/eval run

@@ -453,8 +453,6 @@ class Match:
             r = float(np.hypot(s["along"], s["lateral"]))
             if r <= 1.829 + 0.145:
                 where = f"{r:.2f} m from button"
-            elif s["along"] >= 2.0 or abs(s["lateral"]) > 2.38:
-                where = "spent — parked out of play area, cannot score"
             elif s["along"] < -1.974:
                 where = "guard zone"
             else:
@@ -463,13 +461,13 @@ class Match:
                          f"along {s['along']:+.2f}, lateral {s['lateral']:+.2f}   [{where}]")
         lines.append("")
         lines.append("Geometry: house radius 1.829 m around (0,0); button radius 0.152 m; stone radius 0.145 m. "
-                     "Only stones touching the house score. Stones hit hard are usually NOT deleted — they "
-                     "park behind the house (along > +2.4) where they cannot score; stones stay wherever "
-                     "they stop otherwise (front guards are legal and matter).")
+                     "Only stones touching the house score. A stone is REMOVED from play if it finishes past "
+                     "the back line (along > +1.97) or touches a side board (|lateral| > 2.23) — real takeout "
+                     "rules. Front guards are legal and matter.")
         if int(e["throws_left"]) >= 8:
-            lines.append("RULE ACTIVE: no-takeout rule — a throw that literally removes an OPPONENT stone "
-                         "from the play grid is forfeited (board restored). Parking an opponent stone "
-                         "behind the house does NOT trigger it.")
+            lines.append("RULE ACTIVE: no-takeout rule — a throw that removes an OPPONENT stone from play "
+                         "is forfeited (the board is restored and your throw is consumed). Moving opponent "
+                         "stones without removing them is legal; removing your own stone is legal.")
         lines.append("")
         lines.append("Submit a throw with POST /api/match/{id}/throw, JSON body one of:")
         lines.append('  {"side":"%s","type":"draw","target":[along,lateral]}            — stone comes to rest there' % team)

@@ -50,7 +50,7 @@ function evToM(ev) {
 /* ------------------------------------------------------------------ */
 /* Drawing                                                             */
 /* ------------------------------------------------------------------ */
-function drawSheet() {
+function drawSheet(boardOverride) {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "#dfe9f0"; ctx.fillRect(0, 0, w, h);
@@ -75,7 +75,7 @@ function drawSheet() {
 
   drawTrajectory();
   drawGuide();
-  drawBoard();
+  drawBoard(boardOverride);
   drawMarks();
 }
 function hline(along) { ctx.beginPath(); ctx.moveTo(0, py(along)); ctx.lineTo(canvas.clientWidth, py(along)); ctx.stroke(); }
@@ -412,11 +412,15 @@ async function animateResult(result, side, prevBoard) {
   } else {
     log(`Team ${side} throw ${rec.n}/10`, side);
   }
-  S.faded = computeFaded(prevBoard, result.board);
-  if (result.trajectory) await animateTrajectory(result.trajectory, result.board);
+  if (result.trajectory) {
+    S.faded = computeFaded(prevBoard, result.board);  // origins fade during the throw
+    await animateTrajectory(result.trajectory, result.board);
+  } else {
+    S.faded = [];
+  }
   if (rec.value_A != null) setEval(rec.value_A);
   if (result.end_result) {
-    S.faded = [];   // new end, fresh pre-placed board
+    S.faded = [];
     const er = result.end_result;
     const sc = er.score.team ? `Team ${er.score.team} scores ${er.score.points}` : "blank end";
     log(`End ${er.end}: ${sc} — totals A ${er.totals.A} : ${er.totals.B} B`, "sys");
@@ -436,12 +440,13 @@ function animateTrajectory(traj, finalBoard) {
         if (xy && xy[0] != null) board.push({ slot, team: slot < 6 ? "A" : "B",
                                               along: xy[0], lateral: xy[1] });
       });
-      drawSheet(); drawBoard(board);
+      drawSheet(board);   // faded origin markers render underneath (drawBoard)
       i += 1;
       if (i > traj.frames.length + 4) {
         clearInterval(timer);
         S.animating = false;
-        drawSheet(); if (finalBoard) drawBoard(finalBoard);
+        S.faded = [];      // the throw is over: origin markers disappear
+        drawSheet(finalBoard);
         resolve();
       }
     }, 30);
@@ -564,6 +569,7 @@ $("ppBtn").addEventListener("click", async () => {
 async function championResume() {
   if (S.busy) return;
   S.busy = true;
+  S.solved = null; S.targetMark = null;
   $("sheetHint").textContent = "champion thinking…";
   try {
     const out = await api(`/api/match/${S.matchId}/champion_move`, "POST", {});

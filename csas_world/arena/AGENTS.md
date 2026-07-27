@@ -14,21 +14,20 @@ turn: read the state, post a shot.
   the guard zone); **positive** = behind the tee. `lateral` positive = right.
 - House radius **1.829 m**; button radius 0.152; stone radius **0.145**.
   A stone counts only if it touches the house (center within 1.974 m of (0,0)).
-- **Takeout semantics (training convention — differs from real curling):**
-  stones driven through the back are usually NOT deleted; they come to rest
-  parked behind the house (`along > ~2.4`) where they can never score — think
-  of it as a graveyard strip. The state view marks them "spent". Literal
-  removal from the grid happens only on extreme trajectories. Guards short of
-  the house are legal and tactically central.
+- **Takeout rules (real curling, stack default since 2026-07-27):** a stone is
+  removed from play when it finishes past the back line (center `along >
+  +1.97`) or touches a side board (`|lateral| > 2.23`). Takeout victims — and
+  shooters that roll through — are gone for the rest of the end. Guards short
+  of the house are legal and tactically central.
 - A mixed-doubles end = **10 thrown stones**, alternating teams (5 each). Each
   end starts with 2 pre-placed stones: a center guard (owned by the team
   throwing FIRST) and a stone at the back of the button (owned by the team with
   hammer, throwing last). Scoring team loses hammer; a blanked end also passes
   the hammer.
 - **No-takeout rule**: while `throws_left >= 8` (the first 3 thrown stones),
-  a throw that literally removes an OPPONENT stone from the play grid is
-  forfeited (the board is restored). Hits that merely park a stone behind the
-  house do not trigger it.
+  a throw that removes an OPPONENT stone from play is forfeited — the board is
+  restored and your throw is consumed. Moving opponent stones without removing
+  them is legal; removing your own stone is always legal.
 - **Power play** (optional, once per team per match, only when you have
   hammer, before the end's first throw): moves the pre-placed pair to a wing.
   `POST /api/match/{id}/powerplay {"side":"A","wing":"left"|"right"}`.
@@ -68,8 +67,7 @@ explanation. The champion answers automatically inside your `/throw` call
 3. `{"side":"A","type":"after_contact","stone_slot":K,"target":[along,lateral]}`
    — hit the stone in slot K so that IT finishes at target (tap-backs, splits).
    Use `{"stone_slot":K,"remove":true}` instead of `target` for a takeout
-   (drives it into the spent zone behind the house). Slot numbers come from the
-   state view.
+   (drives it out past the back line). Slot numbers come from the state view.
 4. `{"side":"A","type":"params","action":[speed,angle,spin,y0]}`
    — raw physics: speed 2.20–3.01 m/s, aim angle ±0.1038 rad, spin ±7 rad/s
    (positive curls right), release lateral offset ±0.23 m. Speeds ≈2.45–2.6
