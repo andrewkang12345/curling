@@ -10,11 +10,11 @@
     <main class="shell">
       <section class="hero">
         <div>
-          <p class="eyebrow">Gaussian SetTransformer trainer</p>
-          <h1>Pick the best throw from three near-optimal choices.</h1>
+          <p class="eyebrow">Gaussian value-model trainer</p>
+          <h1>Pick the best throw from four diverse searched choices.</h1>
           <p class="lede">
-            Each card is a pre-selected throw. Before choosing, the sheet shows the intended mean paths.
-            After choosing, the app samples execution noise, animates the thrown stone, and reveals decision and execution value.
+            Each card is policy-guided and ranked by expected decision value across local execution noise.
+            After choosing, the app samples one execution, animates it, and reveals decision and execution value.
           </p>
         </div>
         <button id="randomBtn" class="secondary">Random scenario</button>
@@ -44,6 +44,10 @@
                 <strong id="preValue">-</strong>
               </div>
             </div>
+            <p class="distribution-note">
+              Decision value is the mean across local-noise executions. Execution value is the realized execution's change from that decision mean.
+              All ± bounds are Gaussian p25/p75.
+            </p>
           </div>
 
           <div class="result-card hidden" id="resultCard">
@@ -64,6 +68,14 @@
               <div>
                 <span>Best option</span>
                 <strong id="bestOption">-</strong>
+              </div>
+            </div>
+            <div class="value-chart-panel">
+              <canvas id="valueChart" width="560" height="260" aria-label="Gaussian value distributions"></canvas>
+              <div class="chart-legend">
+                <span class="pre">Pre value</span>
+                <span class="decision">Post decision value</span>
+                <span class="execution">Post execution value</span>
               </div>
             </div>
           </div>

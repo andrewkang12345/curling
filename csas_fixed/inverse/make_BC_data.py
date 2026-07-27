@@ -129,6 +129,7 @@ class SimConfig:
     k_curl: float = CONTACT_MILD_SIM_KWARGS["k_curl"]
     a_linear: float = CONTACT_MILD_SIM_KWARGS["a_linear"]
     gamma_spin: float = CONTACT_MILD_SIM_KWARGS["gamma_spin"]
+    contact_spin_damp: float = 80.0
 
 
 # --------- CSV helpers (no JAX imports here) ---------
@@ -532,6 +533,7 @@ def _worker_run(
         k_curl=float(sim_cfg.k_curl),
         a_linear=float(sim_cfg.a_linear),
         gamma_spin=float(sim_cfg.gamma_spin),
+        contact_spin_damp=float(sim_cfg.contact_spin_damp),
     )
     p_coarse = dataclass_replace(
         p_refine,
@@ -3439,6 +3441,7 @@ if __name__ == "__main__":
     ap.add_argument("--sim-k-curl", type=float, default=CONTACT_MILD_SIM_KWARGS["k_curl"])
     ap.add_argument("--sim-a-linear", type=float, default=CONTACT_MILD_SIM_KWARGS["a_linear"])
     ap.add_argument("--sim-gamma-spin", type=float, default=CONTACT_MILD_SIM_KWARGS["gamma_spin"])
+    ap.add_argument("--sim-contact-spin-damp", type=float, default=80.0)
     ap.add_argument("--verbose", action="store_true", help="Extra logging from workers")
     args = ap.parse_args()
 
@@ -3458,6 +3461,7 @@ if __name__ == "__main__":
         k_curl=float(args.sim_k_curl),
         a_linear=float(args.sim_a_linear),
         gamma_spin=float(args.sim_gamma_spin),
+        contact_spin_damp=float(args.sim_contact_spin_damp),
     )
 
     main(

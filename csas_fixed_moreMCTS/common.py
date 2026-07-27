@@ -29,6 +29,14 @@ STONE_COLS = [f"stone_{i}_{axis}" for i in range(1, NUM_STONES + 1) for axis in 
 KEY_COLS = ["CompetitionID", "SessionID", "GameID", "EndID", "ShotID"]
 END_KEY = ["CompetitionID", "SessionID", "GameID", "EndID"]
 ACTION_COLS = ["est_speed", "est_angle", "est_spin", "est_y0"]
+ACTION_SPEED_MIN = 0.55
+ACTION_SPEED_MAX = 2.35
+ACTION_ANGLE_MIN = -0.25
+ACTION_ANGLE_MAX = 0.25
+ACTION_SPIN_MIN = -20.0
+ACTION_SPIN_MAX = 20.0
+ACTION_Y0_MIN = -0.23
+ACTION_Y0_MAX = 0.23
 FLIP_CENTER_X_NORM = 1500.0 / POS_MAX
 
 
@@ -165,6 +173,63 @@ def compact_m_to_raw(compact: np.ndarray) -> np.ndarray:
     out[live, 1] = 800.0 - compact[live, 0] / 0.003048
     out[~live] = POS_MAX
     return out
+
+
+STONE_RADIUS_M = 0.145
+
+
+def resolve_stone_overlaps(prev_compact: np.ndarray, radius: float = STONE_RADIUS_M, max_iter: int = 64, eps: float = 1e-4) -> np.ndarray:
+    """Project an (N, 2) array of compact-meter stone centers so no pair is closer than 2*radius.
+
+    Real-game CSV positions are quantized and can leave pairs separated by 0.25-0.28 m
+    (a hair inside the 0.290 m diameter). Feeding those to the rigid-contact simulator
+    fires the penalty term at t=0 and the rendered trajectory shows stones drifting apart
+    before any throw. Training is unaffected because it only consumes the FINAL post-throw
+    positions, but the per-frame renderer is — so callers that need a clean t=0 should
+    pass `prev_compact` through this helper first.
+    """
+    pts = np.asarray(prev_compact, dtype=np.float32).copy()
+    if pts.ndim != 2 or pts.shape[0] < 2:
+        return pts
+    r_sum = 2.0 * float(radius)
+    for _ in range(int(max_iter)):
+        moved = False
+        for i in range(pts.shape[0]):
+            for j in range(i + 1, pts.shape[0]):
+                d = pts[j] - pts[i]
+                dist = float(np.linalg.norm(d))
+                if dist >= r_sum:
+                    continue
+                if dist < 1e-9:
+                    n = np.array([1.0, 0.0], dtype=np.float32)
+                    dist = 1e-9
+                else:
+                    n = (d / dist).astype(np.float32)
+                push = ((r_sum - dist) * 0.5) + eps
+                pts[i] = pts[i] - n * push
+                pts[j] = pts[j] + n * push
+                moved = True
+        if not moved:
+            break
+    return pts.astype(np.float32)
+
+
+def resolve_stone_overlaps_raw(stones_raw: np.ndarray, radius: float = STONE_RADIUS_M, max_iter: int = 64, eps: float = 1e-4) -> np.ndarray:
+    """Same overlap resolution as `resolve_stone_overlaps`, but operating on raw CSV coords.
+
+    Converts to compact meters, resolves overlaps among live stones in place, and
+    converts back to raw. Dead slots are preserved (POS_MAX out of play).
+    """
+    stones = np.asarray(stones_raw, dtype=np.float32).reshape(NUM_STONES, 2)
+    live = in_play_raw(stones)
+    if int(live.sum()) < 2:
+        return stones.copy()
+    compact = raw_to_compact_m(stones)
+    live_idx = np.where(live)[0]
+    pts = compact[live_idx]
+    pts = resolve_stone_overlaps(pts, radius=radius, max_iter=max_iter, eps=eps)
+    compact[live_idx] = pts
+    return compact_m_to_raw(compact).astype(np.float32)
 
 
 def next_condition(c: np.ndarray, shots_in_end: int = 16) -> np.ndarray:

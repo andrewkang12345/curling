@@ -11,7 +11,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from common import KEY_COLS, log, set_seed
+from common import (
+    ACTION_ANGLE_MAX,
+    ACTION_ANGLE_MIN,
+    ACTION_SPEED_MAX,
+    ACTION_SPEED_MIN,
+    ACTION_SPIN_MAX,
+    ACTION_SPIN_MIN,
+    ACTION_Y0_MAX,
+    ACTION_Y0_MIN,
+    KEY_COLS,
+    log,
+    set_seed,
+)
 from generate_mcts_iteration_targets import TerminalMctsTargeter, score_end_value, _soft_topk
 from kr_uct_search import _sample_actions, _simulate_candidates, evaluate_states, kr_smooth_scores
 from preplaced_value_data import canonical_preplacement_cases
@@ -54,10 +66,10 @@ class NoisyTerminalMctsTargeter(TerminalMctsTargeter):
 
     def _noisy_posts(self, state: np.ndarray, cond: np.ndarray, action: np.ndarray, n: int) -> np.ndarray:
         actual = self.noise.sample(action, n).astype(np.float32)
-        actual[:, 0] = np.clip(actual[:, 0], 0.4, 3.0)
-        actual[:, 1] = np.clip(actual[:, 1], -1.2, 1.2)
-        actual[:, 2] = np.clip(actual[:, 2], -4.0, 4.0)
-        actual[:, 3] = np.clip(actual[:, 3], -0.75, 0.75)
+        actual[:, 0] = np.clip(actual[:, 0], ACTION_SPEED_MIN, ACTION_SPEED_MAX)
+        actual[:, 1] = np.clip(actual[:, 1], ACTION_ANGLE_MIN, ACTION_ANGLE_MAX)
+        actual[:, 2] = np.clip(actual[:, 2], ACTION_SPIN_MIN, ACTION_SPIN_MAX)
+        actual[:, 3] = np.clip(actual[:, 3], ACTION_Y0_MIN, ACTION_Y0_MAX)
         return _simulate_candidates(state, cond, actual)
 
     def _rollout_to_end(self, state: np.ndarray, cond: np.ndarray, shot_index: int, shots_in_end: int,

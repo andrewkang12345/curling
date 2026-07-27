@@ -223,7 +223,7 @@ def _train_augmented_caches(
 
 def _checkpoint_payload(args, model, optimizer, real_ds, epoch, best_epoch, best_val_key, val_metrics):
     return {
-        "arch": "graph_transformer_gaussian_precomputed",
+        "arch": args.arch,
         "epoch": int(epoch),
         "best_epoch": int(best_epoch),
         "best_val_key": float(best_val_key),
@@ -234,7 +234,7 @@ def _checkpoint_payload(args, model, optimizer, real_ds, epoch, best_epoch, best
         "cond_dim": int(real_ds.cond_dim),
         "hidden_dim": int(args.hidden_dim),
         "num_stones": int(NUM_STONES),
-        "model_class": "ValueGraphTransformerGaussianPrecomputed",
+        "model_class": _unwrap_model(model).__class__.__name__,
         "args": vars(args),
         "graph_feature_env": {
             "GNN_EDGE_SCALAR_MODE": os.environ.get("GNN_EDGE_SCALAR_MODE"),
@@ -282,7 +282,7 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
     _log(f"Real split sizes | train={len(train_idx)} val={len(val_idx)} test={len(test_idx)}", log_path)
     _log(f"Train+synth size={tr_Xp.shape[0]} (synth_used={len(synth_idx)})", log_path)
 
-    cache_dir = out_dir / "cache"
+    cache_dir = Path(args.cache_dir_override) if args.cache_dir_override else (out_dir / "cache")
     train_caches, train_variants = _train_augmented_caches(
         cache_dir,
         tr_Xp,
@@ -318,7 +318,7 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         min_logvar=args.min_logvar,
         max_logvar=args.max_logvar,
     )
-    model = GNN_REGISTRY["graph_transformer_gaussian_precomputed"](
+    model = GNN_REGISTRY[args.arch](
         input_dim=real_ds.input_dim,
         cond_dim=real_ds.cond_dim,
         **cfg,
@@ -472,14 +472,14 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
         },
     }
     ckpt = {
-        "arch": "graph_transformer_gaussian_precomputed",
+        "arch": args.arch,
         "epoch": int(best_ep),
         "model_state_dict": best_state,
         "input_dim": int(real_ds.input_dim),
         "cond_dim": int(real_ds.cond_dim),
         "hidden_dim": int(args.hidden_dim),
         "num_stones": int(NUM_STONES),
-        "model_class": "ValueGraphTransformerGaussianPrecomputed",
+        "model_class": _unwrap_model(model).__class__.__name__,
         "split_info": split_info,
         "args": vars(args),
     }
@@ -492,6 +492,7 @@ def train_one_holdout(args, real_ds, real_Xp, real_Xc, real_Y, synth_Xp, synth_X
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only_holdout", type=int, default=None)
+    ap.add_argument("--arch", default="graph_transformer_gaussian_precomputed")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--batch_size", type=int, default=1024)
     ap.add_argument("--eval_batch_mult", type=float, default=2.0)
@@ -513,6 +514,7 @@ def main() -> None:
     ap.add_argument("--synth_seed", type=int, default=42)
     ap.add_argument("--out_subdir", default="model_graphtf_gaussian_precomputed")
     ap.add_argument("--cache_batch_size", type=int, default=256)
+    ap.add_argument("--cache_dir_override", default="")
     ap.add_argument("--rebuild_cache", action="store_true")
     ap.add_argument("--log_every", type=int, default=10)
     ap.add_argument("--resume", action="store_true")

@@ -9,6 +9,8 @@ const preValue = document.getElementById("preValue");
 const resultCard = document.getElementById("resultCard");
 const decisionValue = document.getElementById("decisionValue");
 const executionValue = document.getElementById("executionValue");
+const valueChart = document.getElementById("valueChart");
+const valueChartCtx = valueChart.getContext("2d");
 const choiceRank = document.getElementById("choiceRank");
 const bestOption = document.getElementById("bestOption");
 const nextBtn = document.getElementById("nextBtn");
@@ -32,8 +34,8 @@ let selectedOptionId = null;
 let lastResult = null;
 
 const view = {
-  xMin: -2.45,
-  xMax: 28.55,
+  xMin: -7.25,
+  xMax: 2.55,
   yMin: -2.45,
   yMax: 2.45,
   pad: 34,
@@ -65,17 +67,119 @@ function fmt(x, n = 3) {
   return Number(x).toFixed(n);
 }
 
+function valueWithQuartileOffset(distribution, fallback = null, n = 3) {
+  if (!distribution) return fmt(fallback, n);
+  return `${fmt(distribution.mean, n)}±${fmt(distribution.plus, n)}`;
+}
+
+const chartConfig = {
+  xMin: -6,
+  xMax: 6,
+  yMax: 2.2,
+  padLeft: 42,
+  padRight: 14,
+  padTop: 18,
+  padBottom: 34,
+};
+
+function gaussianPdf(x, mean, std) {
+  const s = Math.max(Number(std) || 0, 0.08);
+  const z = (x - mean) / s;
+  return Math.exp(-0.5 * z * z) / (s * Math.sqrt(2 * Math.PI));
+}
+
+function chartX(value) {
+  const cfg = chartConfig;
+  const w = valueChart.width - cfg.padLeft - cfg.padRight;
+  return cfg.padLeft + ((value - cfg.xMin) / (cfg.xMax - cfg.xMin)) * w;
+}
+
+function chartY(value) {
+  const cfg = chartConfig;
+  const h = valueChart.height - cfg.padTop - cfg.padBottom;
+  return cfg.padTop + (1 - value / cfg.yMax) * h;
+}
+
+function drawGaussianCurve(distribution, color, fill = false) {
+  if (!distribution) return;
+  const ctx = valueChartCtx;
+  const pts = [];
+  for (let i = 0; i <= 160; i += 1) {
+    const x = chartConfig.xMin + (i / 160) * (chartConfig.xMax - chartConfig.xMin);
+    const y = Math.min(chartConfig.yMax, gaussianPdf(x, distribution.mean, distribution.std));
+    pts.push([chartX(x), chartY(y)]);
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  pts.slice(1).forEach(([x, y]) => ctx.lineTo(x, y));
+  if (fill) {
+    ctx.lineTo(pts[pts.length - 1][0], chartY(0));
+    ctx.lineTo(pts[0][0], chartY(0));
+    ctx.closePath();
+    ctx.fillStyle = color.replace("1)", "0.18)");
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  pts.slice(1).forEach(([x, y]) => ctx.lineTo(x, y));
+  ctx.strokeStyle = color;
+  ctx.lineWidth = fill ? 3 : 2.25;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawValueChart(preDistribution, decisionPostDistribution, executionPostDistribution) {
+  const ctx = valueChartCtx;
+  const cfg = chartConfig;
+  ctx.clearRect(0, 0, valueChart.width, valueChart.height);
+  ctx.fillStyle = "#fbfaf3";
+  ctx.fillRect(0, 0, valueChart.width, valueChart.height);
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(23,32,27,0.16)";
+  ctx.fillStyle = "rgba(23,32,27,0.62)";
+  ctx.lineWidth = 1;
+  ctx.font = "12px ui-sans-serif, system-ui";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  [-6, -3, 0, 3, 6].forEach((tick) => {
+    const x = chartX(tick);
+    ctx.beginPath();
+    ctx.moveTo(x, cfg.padTop);
+    ctx.lineTo(x, valueChart.height - cfg.padBottom);
+    ctx.stroke();
+    ctx.fillText(String(tick), x, valueChart.height - cfg.padBottom + 8);
+  });
+  ctx.strokeStyle = "rgba(23,32,27,0.38)";
+  ctx.beginPath();
+  ctx.moveTo(cfg.padLeft, chartY(0));
+  ctx.lineTo(valueChart.width - cfg.padRight, chartY(0));
+  ctx.stroke();
+  ctx.textAlign = "left";
+  ctx.fillText("value", cfg.padLeft, valueChart.height - 18);
+  ctx.restore();
+
+  drawGaussianCurve(preDistribution, "rgba(36,99,235,1)", false);
+  drawGaussianCurve(decisionPostDistribution, "rgba(20,125,82,1)", true);
+  drawGaussianCurve(executionPostDistribution, "rgba(201,80,49,1)", false);
+}
+
 function drawHouse() {
+  const boardLeft = mToCanvasX(view.yMin);
+  const boardRight = mToCanvasX(view.yMax);
+  const boardTop = mToCanvasY(view.xMin);
+  const boardBottom = mToCanvasY(view.xMax);
   const cx = mToCanvasX(0);
   const cy = mToCanvasY(0);
   ctx.save();
   ctx.strokeStyle = "rgba(23,32,27,0.32)";
   ctx.lineWidth = 2;
   ctx.strokeRect(
-    mToCanvasX(view.yMin),
-    mToCanvasY(view.xMin),
-    (view.yMax - view.yMin) * sheetScale(),
-    (view.xMax - view.xMin) * sheetScale(),
+    boardLeft,
+    boardTop,
+    boardRight - boardLeft,
+    boardBottom - boardTop,
   );
   ctx.strokeStyle = "#5d625e";
   ctx.lineWidth = 2;
@@ -87,17 +191,17 @@ function drawHouse() {
   ctx.strokeStyle = "rgba(23,32,27,0.16)";
   ctx.lineWidth = 1.4;
   ctx.beginPath();
-  ctx.moveTo(mToCanvasX(view.yMin), cy);
-  ctx.lineTo(mToCanvasX(view.yMax), cy);
+  ctx.moveTo(boardLeft, cy);
+  ctx.lineTo(boardRight, cy);
   ctx.stroke();
   ctx.beginPath();
   ctx.moveTo(cx, mToCanvasY(view.xMin));
   ctx.lineTo(cx, mToCanvasY(view.xMax));
   ctx.stroke();
-  [6.4, 28.35].forEach((xLine) => {
+  [-6.4, 1.829].forEach((xLine) => {
     ctx.beginPath();
-    ctx.moveTo(mToCanvasX(view.yMin), mToCanvasY(xLine));
-    ctx.lineTo(mToCanvasX(view.yMax), mToCanvasY(xLine));
+    ctx.moveTo(boardLeft, mToCanvasY(xLine));
+    ctx.lineTo(boardRight, mToCanvasY(xLine));
     ctx.stroke();
   });
   ctx.restore();
@@ -178,7 +282,7 @@ function drawBoard(stones, options = [], selected = null, frameStones = null) {
   ctx.strokeStyle = "#171717";
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(mToCanvasX(0), mToCanvasY(6.4), 7, 0, Math.PI * 2);
+  ctx.arc(mToCanvasX(0), mToCanvasY(-6.4), 7, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 }
@@ -202,7 +306,11 @@ function renderOptions(options, showValues = false) {
     card.innerHTML = `
       <div class="option-header">
         <span class="badge">${opt.label}</span>
-        <h3>${opt.kind === "observed" ? "Observed throw" : `Throw ${opt.label}`}</h3>
+        <h3>Search choice ${opt.label}</h3>
+      </div>
+      <div class="semantic-tags">
+        <span>${opt.shot_purpose || "searched shot"}</span>
+        <span>${opt.curl_type || "curl unspecified"}</span>
       </div>
       <div class="param-grid">
         <div><span>Speed</span><strong>${fmt(opt.speed, 2)}</strong></div>
@@ -211,7 +319,7 @@ function renderOptions(options, showValues = false) {
         <div><span>Y0</span><strong>${fmt(opt.y0, 2)}</strong></div>
       </div>
       <div class="reveal ${showValues ? "" : "hidden"}">
-        Decision value: <strong>${fmt(opt.decision_value, 3)}</strong>
+        Decision value: <strong>${valueWithQuartileOffset(opt.decision_distribution, opt.decision_value)}</strong>
       </div>
     `;
     card.addEventListener("mouseenter", () => {
@@ -251,7 +359,7 @@ async function loadScenario(index = 0, random = false) {
   selectedOptionId = null;
   lastResult = null;
   resultCard.classList.add("hidden");
-  setLoading("Generating three diverse near-optimal throws...");
+  setLoading("Searching diverse robust throws...");
   optionRow.innerHTML = "";
   const res = await fetch(random ? "/api/random" : `/api/scenario?index=${index}`);
   if (!res.ok) throw new Error(await res.text());
@@ -261,7 +369,7 @@ async function loadScenario(index = 0, random = false) {
   scenarioName.textContent = current.name;
   scenarioDesc.textContent = current.description;
   throwingTeam.textContent = `${current.throwing_team}; thrower team is black`;
-  preValue.textContent = fmt(current.pre_value, 3);
+  preValue.textContent = valueWithQuartileOffset(current.pre_distribution, current.pre_value);
   scenarioText.textContent = `${current.index + 1} / ${current.count}`;
   nextBtn.disabled = false;
   randomBtn.disabled = false;
@@ -286,8 +394,8 @@ async function chooseOption(optionId) {
     throw new Error(await res.text());
   }
   const result = await res.json();
-  decisionValue.textContent = fmt(result.decision_value, 3);
-  executionValue.textContent = fmt(result.execution_value, 3);
+  decisionValue.textContent = valueWithQuartileOffset(result.decision_distribution, result.decision_value);
+  executionValue.textContent = valueWithQuartileOffset(result.execution_distribution, result.execution_value);
   choiceRank.textContent = `${result.selected_rank} / ${result.options.length}`;
   bestOption.textContent = result.best_option_id;
   resultCard.classList.remove("hidden");
@@ -296,6 +404,7 @@ async function chooseOption(optionId) {
   lastResult = result;
   current.options = result.options;
   renderOptions(current.options, true);
+  drawValueChart(result.pre_distribution, result.intended_post_distribution, result.executed_post_distribution);
   setActiveOption(optionId);
   animateResult(result, optionId);
 }
@@ -313,7 +422,8 @@ function animateResult(result, optionId) {
       lastResult = result;
       selectedOptionId = optionId;
       drawBoard(current.pre_board, baseOptions, optionId, result.final_board);
-      scenarioText.textContent = `Decision ${fmt(result.decision_value, 3)} | execution ${fmt(result.execution_value, 3)}`;
+      const legalityText = result.illegal_early_takeout ? " | illegal takeout: shot forfeited and board restored" : "";
+      scenarioText.textContent = `Decision ${fmt(result.decision_value, 3)} | execution ${fmt(result.execution_value, 3)}${legalityText}`;
       locked = false;
       nextBtn.disabled = false;
       randomBtn.disabled = false;

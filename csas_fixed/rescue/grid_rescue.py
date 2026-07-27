@@ -42,6 +42,7 @@ SIM_PARAMS = dict(
     k_curl=0.12,
     a_linear=0.10,
     gamma_spin=0.12,
+    contact_spin_damp=80.0,
 )
 COARSE_PARAMS = dict(
     dt=0.03,
@@ -56,10 +57,11 @@ COARSE_PARAMS = dict(
     k_curl=0.12,
     a_linear=0.10,
     gamma_spin=0.12,
+    contact_spin_damp=80.0,
 )
 
-LO = np.array([0.1, -0.35, -3.0, -0.23], dtype=np.float32)
-HI = np.array([3.0, 0.35, 3.0, 0.23], dtype=np.float32)
+LO = np.array([0.55, -0.25, -20.0, -0.23], dtype=np.float32)
+HI = np.array([2.35, 0.25, 20.0, 0.23], dtype=np.float32)
 SPAN = HI - LO
 PAD = np.array([50.0, 50.0], dtype=np.float32)
 MIN_CLEAR = 2 * 0.145 + 1e-3

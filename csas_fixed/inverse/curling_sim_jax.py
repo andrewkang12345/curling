@@ -39,6 +39,7 @@ class CurlingParams:
     k_curl: float = 0.10
     gamma_spin: float = 0.15
     curl_speed_cap: float = 2.5
+    contact_spin_damp: float = 80.0
     # Smooth contact (penalty) parameters
     k_penalty: float = 2.5e4
     c_damp: float = 220.0
@@ -172,6 +173,7 @@ def _micro_step(p: CurlingParams, state: SimState, micro_dt: float) -> SimState:
     d_new = pos_new[jnp.newaxis, :, :] - pos_new[:, jnp.newaxis, :]
     dist_new = jnp.linalg.norm(d_new, axis=-1)                       # (N,N)
     in_contact = jnp.any((2.0 * p.radius - dist_new) > 0.0, axis=1)  # (N,)
+    omega_new = jnp.where(in_contact, omega_new * jnp.exp(-p.contact_spin_damp * micro_dt), omega_new)
     vmag_s = jnp.linalg.norm(vel_new, axis=-1)                       # (N,)
     sleep_mask = ((vmag_s < p.sleep_v_thresh) & (~in_contact))[:, None]  # (N,1)
     vel_new = jnp.where(sleep_mask, jnp.zeros_like(vel_new), vel_new)    # (N,2)
@@ -391,6 +393,7 @@ def _micro_step_flex(p: CurlingParams, state: SimState, micro_dt: float, phys: A
     d_new = pos_new[jnp.newaxis, :, :] - pos_new[:, jnp.newaxis, :]
     dist_new = jnp.linalg.norm(d_new, axis=-1)
     in_contact = jnp.any((2.0 * p.radius - dist_new) > 0.0, axis=1)
+    omega_new = jnp.where(in_contact, omega_new * jnp.exp(-p.contact_spin_damp * micro_dt), omega_new)
     vmag_s = jnp.linalg.norm(vel_new, axis=-1)
     sleep_mask = ((vmag_s < p.sleep_v_thresh) & (~in_contact))[:, None]
     vel_new = jnp.where(sleep_mask, jnp.zeros_like(vel_new), vel_new)

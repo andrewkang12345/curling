@@ -181,6 +181,60 @@ h2 {
   font: 800 1.08rem/1 ui-sans-serif, system-ui, sans-serif;
 }
 
+.distribution-note {
+  margin: 12px 2px 0;
+  color: var(--muted);
+  font: 600 0.76rem/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.value-chart-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 18px;
+  background: #f3f0e8;
+}
+
+#valueChart {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 14px;
+  background: #fbfaf3;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 9px;
+  color: var(--muted);
+  font: 750 0.68rem/1 ui-sans-serif, system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chart-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: -1px;
+}
+
+.chart-legend .pre::before {
+  background: #2463eb;
+}
+
+.chart-legend .decision::before {
+  background: #147d52;
+}
+
+.chart-legend .execution::before {
+  background: #c95031;
+}
+
 .hidden {
   display: none;
 }
@@ -241,6 +295,24 @@ h2 {
   margin: 0;
   font-size: 1.35rem;
   letter-spacing: -0.02em;
+}
+
+.semantic-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 12px;
+}
+
+.semantic-tags span {
+  padding: 5px 8px;
+  border: 1px solid rgba(23, 32, 27, 0.13);
+  border-radius: 999px;
+  background: #faf8f1;
+  color: var(--muted);
+  font: 750 0.68rem/1 ui-sans-serif, system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .param-grid {

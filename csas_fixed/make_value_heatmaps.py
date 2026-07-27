@@ -54,6 +54,23 @@ def _row_condition(row: pd.Series) -> np.ndarray:
     )
 
 
+def _row_prepost_conditions(row: pd.Series, prev_row: pd.Series | None) -> tuple[np.ndarray, np.ndarray]:
+    shot_norm_next = float(row.get("shot_norm", 0.0))
+    shot_norm_prev = shot_norm_next
+    if prev_row is not None and "shot_norm" in prev_row:
+        shot_norm_prev = float(prev_row.get("shot_norm", shot_norm_next))
+    if not np.isfinite(shot_norm_prev):
+        shot_norm_prev = 0.0
+    if not np.isfinite(shot_norm_next):
+        shot_norm_next = shot_norm_prev
+
+    team_order = float(row.get("team_order", 0.0))
+    stone_block = float(row.get("stone_block", 0.0))
+    pre_cond = np.asarray([shot_norm_prev, team_order, stone_block], dtype=np.float32)
+    post_cond = np.asarray([shot_norm_next, team_order, stone_block], dtype=np.float32)
+    return pre_cond, post_cond
+
+
 def _stone_team_name(slot: int) -> str:
     return "black" if int(slot) >= 6 else "white"
 
@@ -101,7 +118,10 @@ def _load_model(ckpt_path: Path, device: torch.device, model_kind: str):
     args = ckpt.get("args", {})
     if model_kind == "graphtf":
         arch = str(ckpt.get("arch", "graph_transformer"))
-        registry_key = "graph_transformer_gaussian" if arch == "graph_transformer_gaussian" else "graph_transformer"
+        if "gaussian" in arch:
+            registry_key = "graph_transformer_gaussian"
+        else:
+            registry_key = "graph_transformer"
         model_kwargs = {}
         if registry_key == "graph_transformer_gaussian":
             model_kwargs.update(
@@ -203,7 +223,8 @@ def _predict_value(model, stones_raw: np.ndarray, cond: np.ndarray, device: torc
 def _candidate_heatmap(
     model,
     pre_stones_raw: np.ndarray,
-    cond: np.ndarray,
+    pre_cond: np.ndarray,
+    post_cond: np.ndarray,
     thrown_slot: int,
     device: torch.device,
     grid_n: int,
@@ -215,11 +236,11 @@ def _candidate_heatmap(
     xx_m, yy_m = np.meshgrid(xs_m, ys_m)
     points_raw = BUTTON_RAW + np.stack([xx_m.ravel(), yy_m.ravel()], axis=1) / M_PER_RAW
 
-    pre_value = _predict_value(model, pre_stones_raw, cond, device)
+    pre_value = _predict_value(model, pre_stones_raw, pre_cond, device)
     boards = np.repeat(pre_stones_raw.reshape(1, NUM_STONES, 2), len(points_raw), axis=0)
     boards[:, thrown_slot, :] = points_raw
     x = torch.from_numpy((boards.reshape(len(points_raw), -1) / POS_MAX).astype(np.float32))
-    c = torch.from_numpy(np.repeat(cond.reshape(1, 3), len(points_raw), axis=0))
+    c = torch.from_numpy(np.repeat(post_cond.reshape(1, 3), len(points_raw), axis=0))
 
     preds = []
     with torch.no_grad():
@@ -266,7 +287,8 @@ def _synthetic_state(rng: np.random.Generator, state_idx: int):
         "title": f"Synthetic state {state_idx} | thrower: {team} stone {thrown_slot + 1}",
         "pre_stones": stones,
         "observed_stones": None,
-        "cond": cond,
+        "pre_cond": cond.copy(),
+        "post_cond": cond.copy(),
         "slot": int(thrown_slot),
     }
 
@@ -276,6 +298,7 @@ def _real_case(ds: ValueDataset, idx: int, slot: int):
     prev_row = _previous_row(ds.df, idx)
     if prev_row is None:
         return None
+    pre_cond, post_cond = _row_prepost_conditions(row, prev_row)
     team = _stone_team_name(slot)
     return {
         "label": (
@@ -288,7 +311,8 @@ def _real_case(ds: ValueDataset, idx: int, slot: int):
         ),
         "pre_stones": _row_positions_raw(prev_row),
         "observed_stones": _row_positions_raw(row),
-        "cond": _row_condition(row),
+        "pre_cond": pre_cond,
+        "post_cond": post_cond,
         "slot": int(slot),
     }
 
@@ -388,7 +412,15 @@ def main() -> None:
         pre_stones_raw = case["pre_stones"]
         slot = int(case["slot"])
         xs_m, ys_m, value_delta, pre_value = _candidate_heatmap(
-            model, pre_stones_raw, case["cond"], slot, device, args.grid, args.extent_m, 4096
+            model,
+            pre_stones_raw,
+            case["pre_cond"],
+            case["post_cond"],
+            slot,
+            device,
+            args.grid,
+            args.extent_m,
+            4096,
         )
 
         fig, ax = plt.subplots(figsize=(6.2, 6.8), dpi=180)

@@ -39,6 +39,14 @@ LANDMARKS = torch.tensor([
     [1150.0 / 4095.0, RELEASE_Y],            # release right
 ], dtype=torch.float32)
 DEFAULT_N_LANDMARKS = LANDMARKS.shape[0]
+FIVE_RELEASE_LANDMARKS = torch.tensor([
+    [BUTTON_X, BUTTON_Y],
+    [350.0 / 4095.0, RELEASE_Y],
+    [550.0 / 4095.0, RELEASE_Y],
+    [750.0 / 4095.0, RELEASE_Y],
+    [950.0 / 4095.0, RELEASE_Y],
+    [1150.0 / 4095.0, RELEASE_Y],
+], dtype=torch.float32)
 
 # Node feature dimensions
 # stone node: (x, y, team_indicator, is_live=1, is_landmark=0, optional_extra_scalar) = 6
@@ -107,16 +115,24 @@ def _configured_edge_scalar_dim():
         return 22
     if mode == "contact_geometry_release_binary_reach_products_plus_onehop_allgoals":
         return 18
+    if mode == "contact_geometry_release_binary_reach_products_plus_hop1_allgoals":
+        return 18
     if mode == "contact_geometry_release_products_plus_onehop_allgoals":
         return 18
     if mode == "contact_geometry_release_binary_reach_products_plus_onehop_no_takeout_center":
+        return 10
+    if mode == "contact_geometry_release_binary_reach_products_plus_hop1_no_takeout_center":
         return 10
     if mode == "contact_geometry_release_products_plus_onehop_no_takeout_center":
         return 10
     if mode == "contact_geometry_release_binary_reach_products_plus_onehop_no_center":
         return 14
+    if mode == "contact_geometry_release_binary_reach_products_plus_hop1_no_center":
+        return 14
     if mode == "contact_geometry_release_products_plus_onehop_no_center":
         return 14
+    if mode == "contact_geometry_release_binary_reach_products_plus_alignment_plus_clearance_plus_hop1_allgoals":
+        return 30
     if mode == "oldbest_plus_contact_geometry_release_products_plus_clearance_plus_onehop":
         return 27
     if mode == "contact_geometry_release_products_plus_clearance_plus_onehop":
@@ -191,8 +207,12 @@ def _resolve_edge_scalar_mode():
         "contact_geometry_release_binary_reach_products",
         "contact_geometry_release_binary_reach_products_plus_clearance",
         "contact_geometry_release_binary_reach_products_plus_onehop_allgoals",
+        "contact_geometry_release_binary_reach_products_plus_hop1_allgoals",
         "contact_geometry_release_binary_reach_products_plus_onehop_no_takeout_center",
+        "contact_geometry_release_binary_reach_products_plus_hop1_no_takeout_center",
         "contact_geometry_release_binary_reach_products_plus_onehop_no_center",
+        "contact_geometry_release_binary_reach_products_plus_hop1_no_center",
+        "contact_geometry_release_binary_reach_products_plus_alignment_plus_clearance_plus_hop1_allgoals",
         "contact_geometry_release_binary_plus_stonepairs_full21",
         "contact_geometry_release_binary_plus_stonepairs_products13",
         "contact_geometry_release_binary_plus_stonepairs_basic9",
@@ -214,6 +234,7 @@ def _resolve_edge_scalar_mode():
         "oldbest_plus_stonepairs_scoresemi11",
         "contact_geometry_all_sources_plus_alignment_plus_clearance_allgoals",
         "contact_geometry_release_binary_reach_products_plus_alignment_plus_clearance_allgoals",
+        "contact_geometry_release_binary_reach_products_plus_alignment_plus_clearance_plus_hop1_allgoals",
         "contact_geometry_release_products_plus_alignment_plus_clearance_allgoals",
         "contact_geometry_release_products_plus_clearance_plus_onehop",
         "contact_geometry_release_products_plus_alignment_plus_onehop_allgoals",
@@ -275,10 +296,42 @@ def _resolve_edge_prune_mode():
     allowed = {
         "none",
         "stone_pair_zero_pairwise_span",
+        "remove_stone_to_stone",
     }
     if mode not in allowed:
         raise ValueError(f"Unsupported GNN_EDGE_PRUNE_MODE={mode!r}")
     return mode
+
+
+def _message_edge_keep_mask(node_feats, node_mask, with_global=False):
+    """
+    Bool keep mask for message passing edges under the configured prune mode.
+
+    Returns:
+      without global: (B, N, N)
+      with_global:    (B, N+1, N+1)
+    """
+    B, N, _ = node_feats.shape
+    device = node_feats.device
+    prune_mode = _resolve_edge_prune_mode()
+
+    keep = node_mask.unsqueeze(2) & node_mask.unsqueeze(1)
+    eye = torch.eye(N, dtype=torch.bool, device=device).unsqueeze(0)
+    keep = keep & ~eye
+
+    if prune_mode == "remove_stone_to_stone":
+        is_live = (node_feats[:, :, 3] > 0.5) & node_mask
+        stone_pair = is_live.unsqueeze(2) & is_live.unsqueeze(1)
+        keep = keep & (~stone_pair)
+
+    if not with_global:
+        return keep
+
+    new_keep = torch.zeros(B, N + 1, N + 1, dtype=torch.bool, device=device)
+    new_keep[:, 0, 1:] = node_mask
+    new_keep[:, 1:, 0] = node_mask
+    new_keep[:, 1:, 1:] = keep
+    return new_keep
 
 
 def _resolve_release_node_mode():
@@ -287,6 +340,8 @@ def _resolve_release_node_mode():
         "three",
         "single",
         "three_plus_takeout_boundary",
+        "five",
+        "five_plus_takeout_boundary",
     }
     if mode not in allowed:
         raise ValueError(f"Unsupported GNN_RELEASE_NODE_MODE={mode!r}")
@@ -297,8 +352,12 @@ def _get_active_landmarks(device=None, dtype=None):
     landmarks = LANDMARKS
     if _resolve_release_node_mode() == "single":
         landmarks = landmarks[[0, 2]]
+    elif _resolve_release_node_mode() == "five":
+        landmarks = FIVE_RELEASE_LANDMARKS
     elif _resolve_release_node_mode() == "three_plus_takeout_boundary":
         landmarks = torch.cat([LANDMARKS, TAKEOUT_LANDMARKS], dim=0)
+    elif _resolve_release_node_mode() == "five_plus_takeout_boundary":
+        landmarks = torch.cat([FIVE_RELEASE_LANDMARKS, TAKEOUT_LANDMARKS], dim=0)
     if device is not None or dtype is not None:
         landmarks = landmarks.to(
             device=device if device is not None else landmarks.device,
@@ -311,6 +370,8 @@ def _get_release_points(device=None, dtype=None):
     landmarks = _get_active_landmarks(device=device, dtype=dtype)
     if _resolve_release_node_mode() == "three_plus_takeout_boundary":
         return landmarks[1:4, :]
+    if _resolve_release_node_mode() == "five_plus_takeout_boundary":
+        return landmarks[1:6, :]
     return landmarks[1:, :]
 
 
@@ -2112,6 +2173,7 @@ def _contact_geometry_release_product_edge_scalars(
     include_alignment=False,
     include_reach_alignment=False,
     include_onehop=False,
+    onehop_mode="legacy",
     include_kinds=("score", "takeout", "center", "semi"),
     source_mode="release_only",
     binary_reach=False,
@@ -2128,6 +2190,8 @@ def _contact_geometry_release_product_edge_scalars(
     release_sources, _ = _source_landmark_masks(node_coords, node_feats, node_mask)
     if source_mode not in {"release_only", "all_sources"}:
         raise ValueError(f"Unknown contact-geometry source_mode: {source_mode}")
+    if onehop_mode not in {"legacy", "inverse_hop1"}:
+        raise ValueError(f"Unknown onehop_mode: {onehop_mode}")
     if source_mode == "release_only" and not bool(release_sources.any()):
         return torch.zeros(B, N, N, EDGE_SCALAR_DIM, device=device, dtype=dtype)
 
@@ -2284,7 +2348,7 @@ def _contact_geometry_release_product_edge_scalars(
             (reach_val * align * clear * paired_valid.to(dtype)).sum(dim=-1, keepdim=True) / denom
         )
 
-    if include_onehop:
+    if include_onehop and onehop_mode == "legacy":
         boundary_lam = _contact_geometry_boundary_lam(target_exp, out_dirs_exp)
         far_goal = target_exp + boundary_lam.unsqueeze(-1) * out_dirs_exp
         onehop_hit, hit_idx, hit_point, l_coords, second_out, corridor_clear = _first_intersection_from_target_rays(
@@ -2332,6 +2396,137 @@ def _contact_geometry_release_product_edge_scalars(
             kind_features[f"{kind}_onehop_x_align_x_clear"] = (
                 (second_align * clear2 * valid2.to(dtype)).sum(dim=-1, keepdim=True) / denom2
             )
+    elif include_onehop and onehop_mode == "inverse_hop1":
+        if source_mode != "release_only":
+            raise ValueError("inverse_hop1 onehop_mode only supports release_only source_mode")
+        stone_live = is_live[:, :NUM_STONES]
+        pair_mask = stone_live.unsqueeze(2) & stone_live.unsqueeze(1)
+        pair_mask = pair_mask & (~torch.eye(NUM_STONES, device=device, dtype=torch.bool).unsqueeze(0))
+        stone_y = node_coords[:, :NUM_STONES, 1]
+        source_above_target = stone_y.unsqueeze(2) > stone_y.unsqueeze(1)
+        pair_mask = pair_mask & source_above_target
+        max_pairs = int(pair_mask.sum(dim=(1, 2)).max().item())
+        hop1_feat = torch.zeros(B, n_source, N, 1 + 2 * len(include_kinds), device=device, dtype=dtype)
+        if max_pairs > 0:
+            flat_mask = pair_mask.view(B, -1)
+            order = torch.argsort(flat_mask.to(torch.int64), dim=1, descending=True)
+            flat_idx = order[:, :max_pairs]
+            pair_valid = torch.gather(flat_mask, 1, flat_idx)
+            src_idx = flat_idx // NUM_STONES
+            tgt_idx = flat_idx % NUM_STONES
+
+            stone_coords = node_coords[:, :NUM_STONES, :]
+            source_stone = torch.gather(stone_coords, 1, src_idx.unsqueeze(-1).expand(B, max_pairs, 2))
+            target_stone = torch.gather(stone_coords, 1, tgt_idx.unsqueeze(-1).expand(B, max_pairs, 2))
+
+            offsets = _contact_geometry_sample_offsets(device, dtype)
+            K = offsets.shape[0]
+            source_vec = source_stone - target_stone
+            source_dist = torch.norm(source_vec, dim=-1, keepdim=True).clamp(min=1e-6)
+            source_dir = source_vec / source_dist
+            side_dir = torch.stack([-source_dir[..., 1], source_dir[..., 0]], dim=-1)
+            contact_dirs = (
+                torch.cos(offsets).view(1, 1, K, 1) * source_dir.unsqueeze(2)
+                + torch.sin(offsets).view(1, 1, K, 1) * side_dir.unsqueeze(2)
+            )
+            out_dirs2 = -contact_dirs
+            contacts2 = target_stone.unsqueeze(2) + INFLATED_STONE_RADIUS_NORM * contact_dirs
+            throw_dir = target_stone.new_tensor([0.0, -1.0]).view(1, 1, 1, 2)
+            forward_mask = (out_dirs2 * throw_dir).sum(dim=-1) > 0.0
+            incoming_vec2 = contacts2 - source_stone.unsqueeze(2)
+            incoming_unit2 = incoming_vec2 / torch.norm(incoming_vec2, dim=-1, keepdim=True).clamp(min=1e-6)
+            align2 = torch.clamp((incoming_unit2 * out_dirs2).sum(dim=-1), min=0.0, max=1.0)
+            source_facing = ((contacts2 - target_stone.unsqueeze(2)) * source_vec.unsqueeze(2)).sum(dim=-1) > 0.0
+            sample_valid = source_facing & forward_mask & pair_valid.unsqueeze(-1)
+
+            inverse_source_contacts = source_stone.unsqueeze(2) - INFLATED_STONE_RADIUS_NORM * incoming_unit2
+            hop1_by_release = _release_to_inverse_stonesource_hop1_by_release(
+                node_coords, node_feats, node_mask, src_idx, inverse_source_contacts
+            )
+            hop1_reach_valid = hop1_by_release & sample_valid.unsqueeze(1)
+
+            target_button_dist2 = torch.norm(
+                target_stone - target_stone.new_tensor([BUTTON_X, BUTTON_Y]).view(1, 1, 2),
+                dim=-1,
+            ).unsqueeze(-1).expand(-1, -1, K)
+            opp_dist_all2 = _opponent_button_distances(node_coords, node_feats, node_mask)[:, :NUM_STONES]
+            opp_button_dist2 = torch.gather(opp_dist_all2, 1, tgt_idx).unsqueeze(-1).expand(-1, -1, K)
+            score_radius2 = opp_button_dist2
+            takeout_radius2 = (opp_button_dist2 + STONE_RADIUS_NORM).clamp(min=STONE_RADIUS_NORM, max=HOUSE_RADIUS)
+            relevant_map = {
+                "score": target_button_dist2 > score_radius2 + 1e-9,
+                "takeout": target_button_dist2 <= takeout_radius2 + 1e-9,
+                "center": torch.ones_like(target_button_dist2, dtype=torch.bool),
+                "semi": torch.ones_like(target_button_dist2, dtype=torch.bool),
+            }
+            goal_points = {}
+            goal_valids = {}
+            clear_map = {}
+            for kind in include_kinds:
+                goal2, goal_valid2 = _contact_geometry_goal_points(
+                    target_stone.unsqueeze(2), out_dirs2, kind, opp_button_dist2
+                )
+                goal_points[kind] = goal2
+                goal_valids[kind] = goal_valid2
+                blocked2 = _segment_blocked_binary_pairlist(
+                    node_coords,
+                    node_feats,
+                    node_mask,
+                    target_stone.unsqueeze(2).expand(-1, -1, K, -1),
+                    goal2,
+                    primary_exclude_idx=tgt_idx,
+                    extra_exclude_idx=src_idx,
+                )
+                clear_map[kind] = (~blocked2).to(dtype)
+
+            target_scatter = tgt_idx.view(B, 1, max_pairs, 1).expand(B, n_source, max_pairs, 1)
+            hop1_num = torch.zeros(B, n_source, N, 1, device=device, dtype=dtype)
+            hop1_den = torch.zeros(B, n_source, N, 1, device=device, dtype=dtype)
+            hop1_num.scatter_add_(
+                2,
+                target_scatter,
+                hop1_reach_valid.to(dtype).sum(dim=-1, keepdim=True),
+            )
+            hop1_den.scatter_add_(
+                2,
+                target_scatter,
+                sample_valid.to(dtype).sum(dim=-1, keepdim=True).unsqueeze(1).expand(-1, n_source, -1, -1),
+            )
+            hop1_feat[..., 0:1] = hop1_num / hop1_den.clamp(min=1.0)
+
+            cursor = 1
+            for kind in include_kinds:
+                paired_valid = hop1_reach_valid & relevant_map[kind].unsqueeze(1) & goal_valids[kind].unsqueeze(1)
+                num_clear = torch.zeros(B, n_source, N, 1, device=device, dtype=dtype)
+                den_kind = torch.zeros(B, n_source, N, 1, device=device, dtype=dtype)
+                num_align_clear = torch.zeros(B, n_source, N, 1, device=device, dtype=dtype)
+                num_clear.scatter_add_(
+                    2,
+                    target_scatter,
+                    (clear_map[kind].unsqueeze(1) * paired_valid.to(dtype)).sum(dim=-1, keepdim=True),
+                )
+                num_align_clear.scatter_add_(
+                    2,
+                    target_scatter,
+                    (align2.unsqueeze(1) * clear_map[kind].unsqueeze(1) * paired_valid.to(dtype)).sum(dim=-1, keepdim=True),
+                )
+                den_kind.scatter_add_(
+                    2,
+                    target_scatter,
+                    paired_valid.to(dtype).sum(dim=-1, keepdim=True),
+                )
+                hop1_feat[..., cursor:cursor+1] = num_clear / den_kind.clamp(min=1.0)
+                cursor += 1
+                hop1_feat[..., cursor:cursor+1] = num_align_clear / den_kind.clamp(min=1.0)
+                cursor += 1
+
+        kind_features["onehop_reach"] = hop1_feat[..., 0:1]
+        cursor = 1
+        for kind in include_kinds:
+            kind_features[f"{kind}_onehop_x_clear"] = hop1_feat[..., cursor:cursor+1]
+            cursor += 1
+            kind_features[f"{kind}_onehop_x_align_x_clear"] = hop1_feat[..., cursor:cursor+1]
+            cursor += 1
 
     reach_mean = reach_val.mean(dim=-1, keepdim=True)
     if source_mode == "release_only":
@@ -2566,13 +2761,35 @@ def _release_to_inverse_stonesource_hop1_binary(node_coords, node_feats, node_ma
     source_contacts: (B, P, K, 2)
     returns: (B, P, K) bool
     """
+    per_release = _release_to_inverse_stonesource_hop1_by_release(
+        node_coords, node_feats, node_mask, src_idx, source_contacts
+    )
+    return per_release.any(dim=1)
+
+
+def _release_to_inverse_stonesource_hop1_by_release(node_coords, node_feats, node_mask, src_idx, source_contacts):
+    """
+    Like _release_to_inverse_stonesource_hop1_binary, but returns a binary result for
+    each release landmark separately.
+
+    src_idx: (B, P)
+    source_contacts: (B, P, K, 2)
+    returns: (B, R, P, K) bool
+    """
     B, N, _ = node_coords.shape
     device = node_coords.device
     dtype = node_coords.dtype
     is_live = (node_feats[:, :, 3] > 0.5) & node_mask
     release_sources, _ = _source_landmark_masks(node_coords, node_feats, node_mask)
     if not bool(release_sources.any()):
-        return torch.zeros(source_contacts.shape[:-1], device=device, dtype=torch.bool)
+        return torch.zeros(
+            source_contacts.shape[0],
+            0,
+            source_contacts.shape[1],
+            source_contacts.shape[2],
+            device=device,
+            dtype=torch.bool,
+        )
 
     n_release = int(release_sources.sum(dim=1).min().item())
     release_order = torch.argsort(release_sources.to(torch.int64), dim=1, descending=True)
@@ -2584,7 +2801,7 @@ def _release_to_inverse_stonesource_hop1_binary(node_coords, node_feats, node_ma
     curvatures = _contact_geometry_curvature_bank(device, dtype)
     t_curve = torch.linspace(0.0, 1.0, CONTACT_GEOMETRY_CURVE_POINTS, device=device, dtype=dtype)
     pair_chunk = _stonepair_hop1_pair_chunk()
-    out = torch.zeros(B, P, K, device=device, dtype=torch.bool)
+    out = torch.zeros(B, n_release, P, K, device=device, dtype=torch.bool)
     one_minus = (1.0 - t_curve).view(1, 1, 1, 1, -1, 1)
     tt = t_curve.view(1, 1, 1, 1, -1, 1)
     blockers = node_coords.view(B, 1, 1, 1, 1, N, 2)
@@ -2624,7 +2841,7 @@ def _release_to_inverse_stonesource_hop1_binary(node_coords, node_feats, node_ma
             torch.full_like(min_dist, CLEARANCE_CAP_NORM),
         )
         reach_clear = min_dist - INFLATED_STONE_RADIUS_NORM
-        out[:, p0:p1, :] = (reach_clear > 0.0).any(dim=1)
+        out[:, :, p0:p1, :] = reach_clear > 0.0
     return out
 
 
@@ -4047,6 +4264,16 @@ def compute_edge_features(node_coords, node_feats, node_mask, c=None):
         edge_scalars = _contact_geometry_release_product_edge_scalars(
             node_coords, node_feats, node_mask, include_clearance=False, include_onehop=True, binary_reach=True
         )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_hop1_allgoals":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=False,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
+            binary_reach=True,
+        )
     elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_onehop_no_takeout_center":
         edge_scalars = _contact_geometry_release_product_edge_scalars(
             node_coords,
@@ -4054,6 +4281,17 @@ def compute_edge_features(node_coords, node_feats, node_mask, c=None):
             node_mask,
             include_clearance=False,
             include_onehop=True,
+            include_kinds=("score", "semi"),
+            binary_reach=True,
+        )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_hop1_no_takeout_center":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=False,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
             include_kinds=("score", "semi"),
             binary_reach=True,
         )
@@ -4065,6 +4303,29 @@ def compute_edge_features(node_coords, node_feats, node_mask, c=None):
             include_clearance=False,
             include_onehop=True,
             include_kinds=("score", "takeout", "semi"),
+            binary_reach=True,
+        )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_hop1_no_center":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=False,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
+            include_kinds=("score", "takeout", "semi"),
+            binary_reach=True,
+        )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_alignment_plus_clearance_plus_hop1_allgoals":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=True,
+            include_alignment=True,
+            include_reach_alignment=True,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
             binary_reach=True,
         )
     elif edge_scalar_mode == "contact_geometry_release_plus_stonepairs_full21":
@@ -4633,7 +4894,7 @@ class GraphTransformerLayer(nn.Module):
         self.norm2 = nn.LayerNorm(hidden_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, h, edge_feats, node_mask):
+    def forward(self, h, edge_feats, node_mask, edge_keep_mask=None):
         """
         Args:
             h: (B, N, D)
@@ -4660,9 +4921,11 @@ class GraphTransformerLayer(nn.Module):
         edge_bias = edge_bias.permute(0, 3, 1, 2)  # (B, H, N, N)
         scores = scores + edge_bias
 
-        # Mask invalid nodes (set attention to -inf for padding)
+        # Mask invalid keys and optionally prune specific directed edges.
         mask_2d = node_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, N) - mask keys
         scores = scores.masked_fill(~mask_2d, float('-inf'))
+        if edge_keep_mask is not None:
+            scores = scores.masked_fill(~edge_keep_mask.unsqueeze(1), float('-inf'))
 
         # Also mask out queries that are padding
         mask_q = node_mask.unsqueeze(1).unsqueeze(-1)  # (B, 1, N, 1)
@@ -4769,10 +5032,11 @@ class ValueGraphTransformer(nn.Module):
         new_mask = torch.zeros(B, new_N, dtype=torch.bool, device=device)
         new_mask[:, 0] = True  # global token always valid
         new_mask[:, 1:] = node_mask
+        edge_keep_mask = _message_edge_keep_mask(node_feats, node_mask, with_global=True)
 
         # Message passing
         for layer in self.layers:
-            h = layer(h, new_edge, new_mask)
+            h = layer(h, new_edge, new_mask, edge_keep_mask=edge_keep_mask)
 
         # Read from global token (index 0)
         global_out = h[:, 0, :]  # (B, D)
@@ -5015,6 +5279,16 @@ def compute_edge_features_fast(node_coords, node_feats, node_mask, c=None):
         edge_scalars = _contact_geometry_release_product_edge_scalars(
             node_coords, node_feats, node_mask, include_clearance=False, include_onehop=True, binary_reach=True
         )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_hop1_allgoals":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=False,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
+            binary_reach=True,
+        )
     elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_onehop_no_takeout_center":
         edge_scalars = _contact_geometry_release_product_edge_scalars(
             node_coords,
@@ -5022,6 +5296,17 @@ def compute_edge_features_fast(node_coords, node_feats, node_mask, c=None):
             node_mask,
             include_clearance=False,
             include_onehop=True,
+            include_kinds=("score", "semi"),
+            binary_reach=True,
+        )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_hop1_no_takeout_center":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=False,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
             include_kinds=("score", "semi"),
             binary_reach=True,
         )
@@ -5033,6 +5318,29 @@ def compute_edge_features_fast(node_coords, node_feats, node_mask, c=None):
             include_clearance=False,
             include_onehop=True,
             include_kinds=("score", "takeout", "semi"),
+            binary_reach=True,
+        )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_hop1_no_center":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=False,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
+            include_kinds=("score", "takeout", "semi"),
+            binary_reach=True,
+        )
+    elif edge_scalar_mode == "contact_geometry_release_binary_reach_products_plus_alignment_plus_clearance_plus_hop1_allgoals":
+        edge_scalars = _contact_geometry_release_product_edge_scalars(
+            node_coords,
+            node_feats,
+            node_mask,
+            include_clearance=True,
+            include_alignment=True,
+            include_reach_alignment=True,
+            include_onehop=True,
+            onehop_mode="inverse_hop1",
             binary_reach=True,
         )
     elif edge_scalar_mode == "contact_geometry_release_plus_stonepairs_full21":
@@ -5490,10 +5798,11 @@ class ValueGraphTransformerFast(nn.Module):
         new_mask = torch.zeros(B, new_N, dtype=torch.bool, device=device)
         new_mask[:, 0] = True
         new_mask[:, 1:] = node_mask
+        edge_keep_mask = _message_edge_keep_mask(node_feats, node_mask, with_global=True)
 
         # Message passing
         for layer in self.layers:
-            h = layer(h, new_edge, new_mask)
+            h = layer(h, new_edge, new_mask, edge_keep_mask=edge_keep_mask)
 
         # Read from global token
         global_out = h[:, 0, :]
@@ -5567,9 +5876,10 @@ class ValueGraphTransformerGaussianFast(nn.Module):
         new_mask = torch.zeros(B, new_N, dtype=torch.bool, device=device)
         new_mask[:, 0] = True
         new_mask[:, 1:] = node_mask
+        edge_keep_mask = _message_edge_keep_mask(node_feats, node_mask, with_global=True)
 
         for layer in self.layers:
-            h = layer(h, new_edge, new_mask)
+            h = layer(h, new_edge, new_mask, edge_keep_mask=edge_keep_mask)
 
         global_out = h[:, 0, :]
         mean = self.mean_head(global_out)
@@ -5584,6 +5894,175 @@ class ValueGraphTransformerGaussianPrecomputed(ValueGraphTransformerGaussianFast
         return self.forward_precomputed(node_feats, edge_feats, node_mask, c)
 
 
+class ValueGraphTransformerGaussianPrecomputedCondPool(nn.Module):
+    """Precomputed GraphTF with masked-mean graph pooling and late condition concat."""
+
+    def __init__(self, input_dim=24, cond_dim=3, hidden_dim=128,
+                 n_layers=3, n_heads=4, dropout=0.1, min_logvar=-6.0, max_logvar=3.5, **kwargs):
+        super().__init__()
+        self.input_dim = input_dim
+        self.cond_dim = cond_dim
+        self.hidden_dim = hidden_dim
+        self.min_logvar = float(min_logvar)
+        self.max_logvar = float(max_logvar)
+
+        self.node_proj = nn.Linear(NODE_FEAT_DIM, hidden_dim)
+        self.cond_proj = nn.Linear(cond_dim, hidden_dim)
+        self.layers = nn.ModuleList([
+            GraphTransformerLayer(hidden_dim, n_heads=n_heads,
+                                 edge_feat_dim=EDGE_FEAT_DIM, dropout=dropout)
+            for _ in range(n_layers)
+        ])
+        self.mean_head = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+        self.logvar_head = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+
+    def forward(self, node_feats, edge_feats, node_mask, c):
+        h = self.node_proj(node_feats)
+        h = h * node_mask.unsqueeze(-1).float()
+        for layer in self.layers:
+            h = layer(h, edge_feats, node_mask, edge_keep_mask=_message_edge_keep_mask(node_feats, node_mask, with_global=False))
+        mask_f = node_mask.unsqueeze(-1).float()
+        pooled = (h * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1.0)
+        c_proj = self.cond_proj(c)
+        fused = torch.cat([pooled, c_proj], dim=-1)
+        mean = self.mean_head(fused)
+        logvar = self.logvar_head(fused).clamp(self.min_logvar, self.max_logvar)
+        return mean, logvar
+
+
+class ValueGraphTransformerGaussianPrecomputedDualCond(nn.Module):
+    """Precomputed GraphTF with global token, pooled graph state, and late condition concat."""
+
+    def __init__(self, input_dim=24, cond_dim=3, hidden_dim=128,
+                 n_layers=3, n_heads=4, dropout=0.1, min_logvar=-6.0, max_logvar=3.5, **kwargs):
+        super().__init__()
+        self.input_dim = input_dim
+        self.cond_dim = cond_dim
+        self.hidden_dim = hidden_dim
+        self.min_logvar = float(min_logvar)
+        self.max_logvar = float(max_logvar)
+
+        self.node_proj = nn.Linear(NODE_FEAT_DIM, hidden_dim)
+        self.cond_proj = nn.Linear(cond_dim, hidden_dim)
+        self.global_token = nn.Parameter(torch.randn(1, 1, hidden_dim) * 0.02)
+        self.layers = nn.ModuleList([
+            GraphTransformerLayer(hidden_dim, n_heads=n_heads,
+                                 edge_feat_dim=EDGE_FEAT_DIM, dropout=dropout)
+            for _ in range(n_layers)
+        ])
+        self.mean_head = nn.Sequential(
+            nn.Linear(hidden_dim * 3, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+        self.logvar_head = nn.Sequential(
+            nn.Linear(hidden_dim * 3, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim // 2, 1),
+        )
+
+    def forward(self, node_feats, edge_feats, node_mask, c):
+        B = node_feats.size(0)
+        device = node_feats.device
+        max_N = node_feats.shape[1]
+        h = self.node_proj(node_feats)
+        h = h * node_mask.unsqueeze(-1).float()
+        c_proj = self.cond_proj(c)
+        global_h = c_proj.unsqueeze(1) + self.global_token.expand(B, -1, -1)
+        h = torch.cat([global_h, h], dim=1)
+        new_N = max_N + 1
+        new_edge = torch.zeros(B, new_N, new_N, EDGE_FEAT_DIM, device=device)
+        new_edge[:, 1:, 1:, :] = edge_feats
+        new_mask = torch.zeros(B, new_N, dtype=torch.bool, device=device)
+        new_mask[:, 0] = True
+        new_mask[:, 1:] = node_mask
+        edge_keep_mask = _message_edge_keep_mask(node_feats, node_mask, with_global=True)
+        for layer in self.layers:
+            h = layer(h, new_edge, new_mask, edge_keep_mask=edge_keep_mask)
+        global_out = h[:, 0, :]
+        node_out = h[:, 1:, :]
+        mask_f = node_mask.unsqueeze(-1).float()
+        pooled = (node_out * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1.0)
+        fused = torch.cat([global_out, pooled, c_proj], dim=-1)
+        mean = self.mean_head(fused)
+        logvar = self.logvar_head(fused).clamp(self.min_logvar, self.max_logvar)
+        return mean, logvar
+
+
+class ValueGraphTransformerGaussianPrecomputedFilmToken(ValueGraphTransformerGaussianFast):
+    """Current global-token GraphTF plus FiLM modulation of node embeddings from c."""
+
+    def __init__(self, input_dim=24, cond_dim=3, hidden_dim=128,
+                 n_layers=3, n_heads=4, dropout=0.1, min_logvar=-6.0, max_logvar=3.5, **kwargs):
+        super().__init__(
+            input_dim=input_dim,
+            cond_dim=cond_dim,
+            hidden_dim=hidden_dim,
+            n_layers=n_layers,
+            n_heads=n_heads,
+            dropout=dropout,
+            min_logvar=min_logvar,
+            max_logvar=max_logvar,
+            **kwargs,
+        )
+        self.cond_gamma = nn.Linear(cond_dim, hidden_dim)
+        self.cond_beta = nn.Linear(cond_dim, hidden_dim)
+
+    def forward_precomputed(self, node_feats, edge_feats, node_mask, c):
+        B = node_feats.size(0)
+        device = node_feats.device
+        max_N = node_feats.shape[1]
+
+        h = self.node_proj(node_feats)
+        gamma = self.cond_gamma(c).unsqueeze(1)
+        beta = self.cond_beta(c).unsqueeze(1)
+        h = h * (1.0 + gamma) + beta
+        h = h * node_mask.unsqueeze(-1).float()
+
+        global_h = self.cond_proj(c).unsqueeze(1) + self.global_token.expand(B, -1, -1)
+        h = torch.cat([global_h, h], dim=1)
+
+        new_N = max_N + 1
+        new_edge = torch.zeros(B, new_N, new_N, EDGE_FEAT_DIM, device=device)
+        new_edge[:, 1:, 1:, :] = edge_feats
+
+        new_mask = torch.zeros(B, new_N, dtype=torch.bool, device=device)
+        new_mask[:, 0] = True
+        new_mask[:, 1:] = node_mask
+        edge_keep_mask = _message_edge_keep_mask(node_feats, node_mask, with_global=True)
+
+        for layer in self.layers:
+            h = layer(h, new_edge, new_mask, edge_keep_mask=edge_keep_mask)
+
+        global_out = h[:, 0, :]
+        mean = self.mean_head(global_out)
+        logvar = self.logvar_head(global_out).clamp(self.min_logvar, self.max_logvar)
+        return mean, logvar
+
+    def forward(self, node_feats, edge_feats, node_mask, c):
+        return self.forward_precomputed(node_feats, edge_feats, node_mask, c)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Registry
 # ─────────────────────────────────────────────────────────────────────
@@ -5593,4 +6072,7 @@ GNN_REGISTRY = {
     "graph_transformer": ValueGraphTransformerFast,
     "graph_transformer_gaussian": ValueGraphTransformerGaussianFast,
     "graph_transformer_gaussian_precomputed": ValueGraphTransformerGaussianPrecomputed,
+    "graph_transformer_gaussian_precomputed_condpool": ValueGraphTransformerGaussianPrecomputedCondPool,
+    "graph_transformer_gaussian_precomputed_dualcond": ValueGraphTransformerGaussianPrecomputedDualCond,
+    "graph_transformer_gaussian_precomputed_film_token": ValueGraphTransformerGaussianPrecomputedFilmToken,
 }

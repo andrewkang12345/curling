@@ -72,17 +72,31 @@ def _plot_graph_source_points(ax, include_release: bool, include_takeout: bool) 
         )
 
 
-def candidate_heatmap_sheet(model, pre_stones_raw, cond, thrown_slot, device, nx, ny, x_min, x_max, y_min, y_max, batch_size):
+def candidate_heatmap_sheet(
+    model,
+    pre_stones_raw,
+    pre_cond,
+    post_cond,
+    thrown_slot,
+    device,
+    nx,
+    ny,
+    x_min,
+    x_max,
+    y_min,
+    y_max,
+    batch_size,
+):
     xs_m = np.linspace(x_min, x_max, nx, dtype=np.float32)
     ys_m = np.linspace(y_min, y_max, ny, dtype=np.float32)
     xx_m, yy_m = np.meshgrid(xs_m, ys_m)
     points_raw = hv.BUTTON_RAW + np.stack([xx_m.ravel(), yy_m.ravel()], axis=1) / hv.M_PER_RAW
 
-    pre_value = hv._predict_value(model, pre_stones_raw, cond, device)
+    pre_value = hv._predict_value(model, pre_stones_raw, pre_cond, device)
     boards = np.repeat(pre_stones_raw.reshape(1, hv.NUM_STONES, 2), len(points_raw), axis=0)
     boards[:, thrown_slot, :] = points_raw
     x = torch.from_numpy((boards.reshape(len(points_raw), -1) / hv.POS_MAX).astype(np.float32))
-    c = torch.from_numpy(np.repeat(cond.reshape(1, 3), len(points_raw), axis=0))
+    c = torch.from_numpy(np.repeat(post_cond.reshape(1, 3), len(points_raw), axis=0))
 
     preds = []
     with torch.no_grad():
@@ -101,6 +115,7 @@ def main():
     ap.add_argument("--n", type=int, default=5)
     ap.add_argument("--nx", type=int, default=95)
     ap.add_argument("--ny", type=int, default=177)
+    ap.add_argument("--batch-size", type=int, default=4096)
     ap.add_argument("--x-min", type=float, default=-2.375)
     ap.add_argument("--x-max", type=float, default=2.375)
     ap.add_argument("--y-min", type=float, default=-2.44)
@@ -144,7 +159,8 @@ def main():
                     "title": f"Preplaced {c['mode']} | guard slot {c['guard_slot']} | first thrower: {team}",
                     "pre_stones": c["stones_raw"],
                     "observed_stones": None,
-                    "cond": c["cond"],
+                    "pre_cond": c["cond"].copy(),
+                    "post_cond": c["cond"].copy(),
                     "slot": int(c["thrown_slot"]) - 1,
                     "mode": c["mode"],
                     "guard_slot": int(c["guard_slot"]),
@@ -163,7 +179,8 @@ def main():
         xs_m, ys_m, value_delta, pre_value = candidate_heatmap_sheet(
             model,
             case["pre_stones"],
-            case["cond"],
+            case["pre_cond"],
+            case["post_cond"],
             int(case["slot"]),
             device,
             args.nx,
@@ -172,7 +189,7 @@ def main():
             args.x_max,
             args.y_min,
             args.y_max,
-            4096,
+            args.batch_size,
         )
         rendered.append((case, xs_m, ys_m, value_delta, pre_value))
 

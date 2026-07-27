@@ -549,6 +549,57 @@ def evaluate_state_value_batch(
     return np.asarray(model_fn(raw_norm_batch, c_batch), dtype=np.float32).reshape(-1)
 
 
+def evaluate_state_distribution(
+    model_fn,
+    board_m: np.ndarray,
+    raw_defaults: np.ndarray,
+    c_vec: np.ndarray,
+    stone_block: float,
+    shot_index: float,
+    shots_in_end: float,
+    shot_norm: float,
+    use_rule_based_terminal: bool,
+) -> Tuple[float, float]:
+    """Return Gaussian predictive mean and standard deviation for one state."""
+    raw_board = positions_m_to_raw_matrix(board_m, raw_defaults=raw_defaults)
+    if use_rule_based_terminal and _is_terminal_state(shot_index, shots_in_end, shot_norm):
+        return _terminal_value_from_raw_board(raw_board, stone_block), 0.0
+    raw_norm = normalize_raw_matrix(raw_board)
+    if hasattr(model_fn, "predict_distribution"):
+        mean, logvar = model_fn.predict_distribution(raw_norm, c_vec)
+        return float(mean), float(np.exp(0.5 * float(logvar)))
+    return float(model_fn(raw_norm, c_vec)), 0.0
+
+
+def evaluate_state_distribution_batch(
+    model_fn,
+    board_batch_m: np.ndarray,
+    raw_defaults: np.ndarray,
+    c_batch: np.ndarray,
+    stone_block: float,
+    shot_index: float,
+    shots_in_end: float,
+    shot_norm: float,
+    use_rule_based_terminal: bool,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Return Gaussian predictive means and standard deviations for state batches."""
+    raw_batch = positions_m_to_raw_matrix_batch(board_batch_m, raw_defaults=raw_defaults)
+    if use_rule_based_terminal and _is_terminal_state(shot_index, shots_in_end, shot_norm):
+        means = np.asarray(
+            [_terminal_value_from_raw_board(board_raw, stone_block) for board_raw in raw_batch],
+            dtype=np.float32,
+        )
+        return means, np.zeros_like(means)
+    raw_norm_batch = normalize_raw_matrix_batch(raw_batch)
+    if hasattr(model_fn, "predict_distribution"):
+        means, logvars = model_fn.predict_distribution(raw_norm_batch, c_batch)
+        means = np.asarray(means, dtype=np.float32).reshape(-1)
+        stds = np.exp(0.5 * np.asarray(logvars, dtype=np.float32).reshape(-1))
+        return means, stds
+    means = np.asarray(model_fn(raw_norm_batch, c_batch), dtype=np.float32).reshape(-1)
+    return means, np.zeros_like(means)
+
+
 # ----------------------------
 # Value model loader
 # ----------------------------
@@ -579,6 +630,14 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
             pred = booster.predict(xgb.DMatrix(feat)).astype(np.float32, copy=False)
             return float(pred[0]) if single else pred
 
+        def predict_distribution(x_flat: np.ndarray, c_vec: np.ndarray):
+            mean = predict(x_flat, c_vec)
+            if np.isscalar(mean):
+                return float(mean), float("-inf")
+            mean_arr = np.asarray(mean, dtype=np.float32)
+            return mean_arr, np.full_like(mean_arr, -np.inf)
+
+        predict.predict_distribution = predict_distribution
         return predict, None
 
     try:
@@ -607,16 +666,29 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
     # Prefer explicit arch if provided in checkpoint.
     if arch:
         _ensure_ablation_on_path()
-        if arch in {"egnn", "graph_transformer", "graph_transformer_gaussian"}:
+        if arch in {
+            "egnn",
+            "graph_transformer",
+            "graph_transformer_gaussian",
+            "graph_transformer_gaussian_precomputed",
+            "graph_transformer_gaussian_precomputed_condpool",
+            "graph_transformer_gaussian_precomputed_dualcond",
+            "graph_transformer_gaussian_precomputed_film_token",
+        }:
             from gnn_models import GNN_REGISTRY  # type: ignore
 
-            model = GNN_REGISTRY[arch](
+            registry_key = arch
+            if arch.startswith("graph_transformer_gaussian_precomputed"):
+                registry_key = "graph_transformer_gaussian"
+            model = GNN_REGISTRY[registry_key](
                 input_dim=input_dim,
                 cond_dim=cond_dim,
                 hidden_dim=hidden_dim,
                 n_layers=n_layers,
                 n_heads=n_heads,
                 dropout=dropout,
+                min_logvar=float(args_dict.get("min_logvar", -6.0)),
+                max_logvar=float(args_dict.get("max_logvar", 3.5)),
             ).to(device)
         elif arch in {"set_transformer", "settransformer", "value_set_transformer", "set_transformer_gaussian"}:
             from new_architectures import ValueSetTransformer, ValueSetTransformerGaussian  # type: ignore
@@ -678,7 +750,7 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    def predict(x_flat: np.ndarray, c_vec: np.ndarray):
+    def _predict_outputs(x_flat: np.ndarray, c_vec: np.ndarray):
         x_arr = np.asarray(x_flat, dtype=np.float32)
         c_arr = np.asarray(c_vec, dtype=np.float32)
         single = x_arr.ndim == 1
@@ -700,9 +772,21 @@ def load_value_model(model_path: pathlib.Path, device: str = "cpu"):
         with torch.no_grad():
             out = model(x_t, c_t)
             if isinstance(out, tuple):
-                out = out[0]
-            val = out.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
-        return float(val[0]) if single else val
+                mean_t, logvar_t = out
+            else:
+                mean_t = out
+                logvar_t = torch.full_like(mean_t, -torch.inf)
+            mean = mean_t.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
+            logvar = logvar_t.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
+        if single:
+            return float(mean[0]), float(logvar[0])
+        return mean, logvar
+
+    def predict(x_flat: np.ndarray, c_vec: np.ndarray):
+        mean, _ = _predict_outputs(x_flat, c_vec)
+        return mean
+
+    predict.predict_distribution = _predict_outputs
 
     return predict, cond_dim
 

@@ -68,12 +68,12 @@ SLOT_HYBRID_SET_W = 0.25
 
 @dataclass(frozen=True)
 class SolveBounds:
-    speed_min: float = 0.1
-    speed_max: float = 3.0
-    angle_min: float = -0.35
-    angle_max: float = 0.35
-    spin_min: float = -3.0
-    spin_max: float = 3.0
+    speed_min: float = 0.55
+    speed_max: float = 2.35
+    angle_min: float = -0.25
+    angle_max: float = 0.25
+    spin_min: float = -20.0
+    spin_max: float = 20.0
     y0_min: float = -0.23
     y0_max: float = 0.23
 

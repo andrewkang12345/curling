@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
+os.environ.setdefault("GNN_EDGE_SCALAR_MODE", "contact_geometry_release_binary_reach_products_plus_hop1_no_center")
+os.environ.setdefault("GNN_NODE_FEATURE_MODE", "none")
+os.environ.setdefault("GNN_RELEASE_NODE_MODE", "three_plus_takeout_boundary")
+os.environ.setdefault("GNN_EDGE_PRUNE_MODE", "remove_stone_to_stone")
 
 import jax
 import numpy as np
@@ -38,6 +42,13 @@ MAX_SCENARIOS = 180
 MIN_CLEAR = 2 * 0.145
 SEPARATE_PASSES = 6
 SHOT_STAGE_VALUES = [1 / 9, 2 / 9, 3 / 9, 4 / 9, 5 / 9, 6 / 9, 7 / 9, 8 / 9, 1.0]
+WEBAPP_GRAPHTF_CKPT = (
+    ROOT_DIR
+    / "holdouts"
+    / "0"
+    / "model_graphtf_gaussian_precomputed_cg_binary_release_hop1_no_center_nostonestone_aug_b1024_lr2e4_g1"
+    / "model.pt"
+)
 
 
 @dataclass
@@ -109,7 +120,10 @@ def _settf_gaussian_checkpoint_map() -> dict[int, Path]:
 
 @lru_cache(maxsize=8)
 def _load_model_for_competition(competition_id: int):
-    ckpt = _settf_gaussian_checkpoint_map().get(int(competition_id))
+    if int(competition_id) == 0 and WEBAPP_GRAPHTF_CKPT.exists():
+        ckpt = WEBAPP_GRAPHTF_CKPT
+    else:
+        ckpt = _settf_gaussian_checkpoint_map().get(int(competition_id))
     if ckpt is None:
         raise FileNotFoundError(f"No Gaussian SetTransformer checkpoint for competition {competition_id}.")
     model_fn, _ = load_value_model(ckpt, device=DEFAULT_DEVICE)
