@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+checkpoints/
+artifacts/replay/
+!artifacts/replay/COLLECTIONS.md
+artifacts/replay_smoke/
+artifacts/logs/
+artifacts/figures/
+*.npz
+.pytest_cache/
+.jax_cache/
+Trash/
+eval_out/
+*.log
+nohup.out

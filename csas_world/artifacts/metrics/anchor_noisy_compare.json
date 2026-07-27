@@ -1,0 +1,83 @@
+{
+  "world_ckpt": "checkpoints/csas_world/anchor_noisy/model.pt",
+  "policy_nll": {
+    "val": {
+      "csas_world": 4.192266464233398,
+      "human_prior_fullcov": 4.070284843444824
+    },
+    "test": {
+      "csas_world": 4.18178653717041,
+      "human_prior_fullcov": 4.09648323059082
+    }
+  },
+  "value": {
+    "val": {
+      "csas_world": {
+        "mse": 2.1802042934262547,
+        "nll": 0.8003373331505643
+      },
+      "gaussian_value": {
+        "mse": 2.219548245439798,
+        "nll": 6.277974837690685
+      }
+    },
+    "test": {
+      "csas_world": {
+        "mse": 2.0837437878705036,
+        "nll": 0.8259094644292426
+      },
+      "gaussian_value": {
+        "mse": 2.0901774110127906,
+        "nll": 6.956776951790103
+      }
+    }
+  },
+  "head_to_head": {
+    "checkpoints/policy/human_prior_fullcov/model.pt": {
+      "h02": {
+        "winrate": 0.5,
+        "winrate_order0": 0.225,
+        "winrate_order1": 0.775,
+        "mean_margin": 0.0625,
+        "n_ends": 80
+      },
+      "h06": {
+        "winrate": 0.5125,
+        "winrate_order0": 0.125,
+        "winrate_order1": 0.9,
+        "mean_margin": 0.2375,
+        "n_ends": 80
+      },
+      "h10": {
+        "winrate": 0.525,
+        "winrate_order0": 0.175,
+        "winrate_order1": 0.875,
+        "mean_margin": -0.025,
+        "n_ends": 80
+      }
+    },
+    "checkpoints/policy/mcts_horizon/h10/model.pt": {
+      "h02": {
+        "winrate": 0.5875,
+        "winrate_order0": 0.425,
+        "winrate_order1": 0.75,
+        "mean_margin": 0.3125,
+        "n_ends": 80
+      },
+      "h06": {
+        "winrate": 0.6375,
+        "winrate_order0": 0.3,
+        "winrate_order1": 0.975,
+        "mean_margin": 0.5125,
+        "n_ends": 80
+      },
+      "h10": {
+        "winrate": 0.625,
+        "winrate_order0": 0.35,
+        "winrate_order1": 0.9,
+        "mean_margin": 0.4375,
+        "n_ends": 80
+      }
+    }
+  }
+}

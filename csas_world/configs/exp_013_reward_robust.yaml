@@ -1,0 +1,59 @@
+# EXP-013: 1-ply-ROBUST r̂₂ selector (restores noise-robust selection, lost since EXP-002).
+# Collection distillation target = soft-top-k of candidates scored by the MEAN over K=8 noisy executions
+# of -r̂₂(post) (the STATE-conditioned 2-step reward head; action-cond gave nothing per EXP-012). No deep
+# tree — the EZ 1-ply path + noise_samples averaging IS the 1-ply-robust scorer. Round 0 falls back to -V
+# (no reward head yet); round 1+ uses the trained reward head via --value-world (closed loop on r̂₂).
+# In-loop h2h is NOISY (robust select + realized noise). Reassess after; refinements (searched-opponent
+# target, deployment-side r̂₂ re-rank) are v2.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true        # state-conditioned (reward_action_conditioned defaults false)
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 96
+  diverse_candidates: 96
+  soft_topk: 24
+  noise_samples: 8             # K noisy executions averaged per candidate -> 1-ply-robust selection
+  rollout_greedy_steps: 5
+  use_mcts_tree: false         # EZ 1-ply path (not the deep tree) -> uses the noise_samples robust scorer
+  terminal_rollout_scoring: false
+  reward_leaf_select: true     # candidate value = -r̂₂(post)
+  collect_step_reward: true    # train the 2-step reward head
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 2
+  max_horizon: 5
+  rounds_per_stage: 2          # r0 falls back to -V; r1 uses the trained r̂₂ (closed loop)
+  roots_per_stage: 64
+  include_preplaced: false
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 30
+  noisy_h2h: true

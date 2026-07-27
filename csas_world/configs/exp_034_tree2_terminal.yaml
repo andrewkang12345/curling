@@ -1,0 +1,76 @@
+# EXP-034 / az_v11 collect-time config: DENSE-ROOT KR-UCT (depth 2) + TERMINAL-ROLLOUT
+# leaves — the classic MCTS shape (tree policy for k plies, then rollout to terminal),
+# value-free, with visit-count-driven adaptive allocation.
+#
+# vs az_v10's flat operator (exp_033): the sim budget is now allocated ADAPTIVELY by
+# KR-UCT (visit counts + kernel-effective exploration bonus + progressive widening)
+# instead of uniformly, concentrating MC precision on the near-tie candidates at the
+# top; and the first 2 plies of each simulation are search-based (tree) rather than
+# raw-policy, softening the rollout-policy approximation.
+# vs az_v9's tree (exp_031): leaves are on-policy MC rollouts to terminal + rule
+# scoring (value-model-FREE) instead of the learned value head, and the root is
+# pre-seeded with the dense generate_candidates proposal (eventual density) instead
+# of policy-only progressive widening.
+#
+# Smoke timing (az_v9/iter2 policy, sims=96, 48 dense root cands): ~8.8 min/game.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 24             # dense ROOT seed: policy...
+  structured_candidates: 8          # ...+ structured
+  diverse_candidates: 8             # ...+ grid
+  local_candidates: 4               # ...+ local perturbations
+  global_candidates: 4              # ...+ uniform (density floor); ~48 total at root
+  soft_topk: 24
+  noise_samples: 8                  # noise realisations inside tree transitions/rollouts
+  rollout_greedy_steps: 5
+  use_mcts_tree: true               # KR-UCT tree: visit counts + exploration + widening
+  mcts_sims: 96                     # 48 first-visits (one per seed) + 48 adaptive
+  mcts_max_depth: 2                 # tree policy for 2 plies...
+  mcts_k_widen: 1.5
+  value_leaf_bootstrap: false       # ...then ON-POLICY MC ROLLOUT TO TERMINAL at leaves (value-free)
+  search_root_only: false
+  terminal_rollout_scoring: false   # (that flag is the flat az_v10 path; the tree branch handles leaves)
+  reward_leaf_select: false
+  collect_step_reward: true
+  rollout_temp: 0.6
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  rounds_per_stage: 2
+  roots_per_stage: 80
+  include_preplaced: true
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 80
+  noisy_h2h: true

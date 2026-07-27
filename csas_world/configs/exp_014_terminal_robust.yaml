@@ -1,0 +1,58 @@
+# EXP-014: 1-ply-ROBUST search-based TERMINAL-ROLLOUT selector (no reward head). Candidate value =
+# mean over K=4 noisy executions of the terminal rule score, rolled to the end with a VALUE-GREEDY
+# rollout (each ply picks the best of search_rollout_n=12 policy samples by value -> "search-based
+# rollout"; single noisy realization downstream = noise-naive per design). Uses ONLY the terminal value
+# (no reward head, no value bootstrap). Compares vs EXP-013 (r̂₂ leaf) under noise. Value model (frozen
+# baseline) only steers the rollout's move choice; the leaf value is the exact rule score.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: false       # NO reward head (the EXP-013 contrast)
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.0
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 96
+  diverse_candidates: 96
+  soft_topk: 24
+  noise_samples: 4             # K_ego: 1-ply-robust averaging over noisy executions of each candidate
+  rollout_temp: 0.6
+  use_mcts_tree: false
+  terminal_rollout_scoring: true   # leaf value = terminal rule score (no bootstrap, no reward head)
+  search_rollout_n: 12             # value-greedy rollout width (searched opponent + self)
+  reward_leaf_select: false
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 2
+  max_horizon: 5
+  rounds_per_stage: 2
+  roots_per_stage: 48          # fewer than EXP-013: the search-based terminal rollout is heavier
+  include_preplaced: false
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 30
+  noisy_h2h: true

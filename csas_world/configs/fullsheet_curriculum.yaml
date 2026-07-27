@@ -1,0 +1,18 @@
+# Full-sheet EfficientZero curriculum. Paths (prior_policy_ckpt -> human_prior_fullcov_fullsheet,
+# human_csv, value data) inherit the full-sheet config.py defaults; only sizes/noise overridden.
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+train:
+  epochs: 8                  # warm-started each round; 8 is enough (val_nll plateaus by ~e6)
+  batch_size: 256            # edge-feature 6D tensor OOMs at the 1024 default
+  samples_per_epoch: 90000   # ~117 steps/epoch/rank at bs256 x 3 GPUs; training is the bottleneck
+  gpus: [0, 1, 2, 3]         # all 4 GPUs (overridden by launcher --gpus); h2h on cuda:0
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  rounds_per_stage: 2
+  roots_per_stage: 150
+  include_preplaced: false   # preplaced first-shots are still truncated; exclude for sheet consistency
+  converge_band: 0.04
+  converge_patience: 2
+  h2h_games_per_order: 30    # h2h sim runs CPU in-parent; keep it tractable at high horizons

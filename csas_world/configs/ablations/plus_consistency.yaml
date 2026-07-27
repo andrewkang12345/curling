@@ -1,0 +1,18 @@
+# Ablation: policy + value + latent dynamics G(h,a) with EMA-target latent
+# consistency + reward/outcome heads.  No physical decoder.
+# This is the core EfficientZero configuration.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_outcome: true
+  use_decoder: false
+  use_consistency: true
+  consistency_mode: simsiam
+loss:
+  policy_bc: 1.0
+  policy_distill: 1.0
+  value: 1.0
+  outcome: 0.5
+  consistency: 2.0
+  decoder: 0.0

@@ -1,0 +1,46 @@
+# EXP-020: same as EXP-018/019 consolidation but with value_from_mcts=true: the value head
+# is ALSO supervised by the MCTS-source records'  realized terminal margin (sign-flipped per
+# perspective, broadcast across the K-step unroll), in addition to the real SOURCE_VALUE buffer.
+# Loss weight kept at value=1.5 (no rescaling). All else equal to EXP-018/019.
+# collection, no curriculum. Recipe otherwise IDENTICAL to EXP-013/017. Augment ON (verified correct).
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true        # keep the r̂₂ head (union records have reward targets; needed for future search)
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: true        # EXP-020: value head ALSO trains on MCTS-record MC returns
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+  reward_action_conditioned: false
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60               # policy distillation samples 60% from the union (all horizons mixed)
+  value_use_synthetic: true
+search:                        # unused (no collection) -- present for config validity
+  noise_config: configs/noise/v2_fullsheet.json
+  noise_samples: 8
+train:
+  epochs: 20                   # one consolidation pass over the union (more epochs: 20x the records of a stage)
+  batch_size: 256
+  samples_per_epoch: 90000
+  augment: true                # horizontal flip + team-slot swap (verified correct over state/action/dist/cond)
+  gpus: [0, 1, 2, 3]
+  run_name: exp020_consolidate_valuemcts
+horizon:                       # unused (no curriculum)
+  start_horizon: 1
+  max_horizon: 10
+  include_preplaced: true
+  noisy_h2h: true

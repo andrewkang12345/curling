@@ -1,0 +1,18 @@
+# Full model: every head enabled (policy, value, latent dynamics + consistency,
+# reward/outcome, physical decoder).  Equivalent to plus_decoder; kept as the
+# canonical "everything on" entry point.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_outcome: true
+  use_decoder: true
+  use_consistency: true
+  consistency_mode: simsiam
+loss:
+  policy_bc: 1.0
+  policy_distill: 1.0
+  value: 1.0
+  outcome: 0.5
+  consistency: 2.0
+  decoder: 1.0

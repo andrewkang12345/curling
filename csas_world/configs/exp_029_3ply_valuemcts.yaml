@@ -1,0 +1,65 @@
+# EXP-029 / az_v7 collect-time config: THREE-PLY training-time policy-improvement operator.
+#
+# Identical to configs/exp_026_2ply_valuemcts.yaml except mcts_max_depth: 3.
+# The tree now recurses to depth 3 (root -> child -> grandchild -> value-head leaf) instead
+# of stopping at depth 2. That's one extra ply of real lookahead beyond what 2-ply provides.
+#
+# Cost impact vs 2-ply: each of the 60 sims does 3 simulator steps instead of 2 before
+# evaluating a leaf via the value head. Expected ~1.5x the 2-ply per-record cost; per
+# horizon (h04-h10) ~40-55 min vs 2-ply's ~35-42 min. Total iter ~9-11h vs 2-ply's ~8h.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 96
+  diverse_candidates: 96
+  soft_topk: 24
+  noise_samples: 8
+  rollout_greedy_steps: 5
+  use_mcts_tree: true
+  mcts_sims: 60
+  mcts_max_depth: 3                 # CHANGED vs exp_026: 3 plies (was 2)
+  value_leaf_bootstrap: true
+  search_root_only: false
+  terminal_rollout_scoring: false
+  reward_leaf_select: false
+  collect_step_reward: true
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  rounds_per_stage: 2
+  roots_per_stage: 80
+  include_preplaced: true
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 80
+  noisy_h2h: true

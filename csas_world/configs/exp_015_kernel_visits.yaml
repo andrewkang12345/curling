@@ -1,0 +1,66 @@
+# EXP-015: KR-UCT *kernel-effective visit count* W(a)=Σ_b K(a,b)n_b as the POLICY target
+# (Yee/Lisý/Bowling 2016, the continuous/stochastic analog of an AlphaZero visit target),
+# from a DEPTH-1 root bandit with a value-head leaf + fresh execution noise per visit (so
+# repeated visits average execution uncertainty and the kernel pools evidence across nearby
+# actions). Policy distillation target = π ∝ W^{1/τ} (τ=1 -> π ∝ W). VALUE head is NOT touched
+# by the search: value_from_mcts=false trains it only on the realized-ValueDiff buffer.
+# (EXP-016 = this + kernel-regressed root value as the value target.)
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: false
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false          # EXP-015: W for POLICY, NOT for value (value = realized buffer)
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.0
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  noise_samples: 1                # >0 only to ENABLE execution noise; the bandit's revisits do the averaging
+  policy_target_kernel_visits: true   # distillation target = kernel-effective visit count W(a)
+  search_root_only: true              # depth-1 KR-UCT bandit (no grandchildren)
+  value_target_kernel_root: false     # EXP-015: value target stays realized margin (and value_from_mcts ignores it)
+  kernel_bandwidth: 0.30              # wider kernel -> more robust pooling of W across nearby actions
+  policy_temperature: 1.0             # π ∝ W^{1/τ} with τ=1 -> π ∝ W (AlphaZero training convention)
+  soft_topk: 24                       # M distillation candidates
+  mcts_sims: 96                       # bandit budget per root
+  mcts_k_widen: 2.0
+  mcts_alpha_widen: 0.5
+  mcts_uct_c: 0.6
+  rollout_temp: 0.6
+  use_mcts_tree: false
+  terminal_rollout_scoring: false
+  reward_leaf_select: false
+  value_leaf_bootstrap: false
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 2
+  max_horizon: 5
+  rounds_per_stage: 2
+  roots_per_stage: 48
+  include_preplaced: false
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 30
+  noisy_h2h: true

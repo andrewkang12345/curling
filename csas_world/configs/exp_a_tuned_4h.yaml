@@ -1,0 +1,56 @@
+# EXP-008 (EXP-A): tuned recipe on the full sheet, 4-horizon A/B (h=2..5).
+# Diagnoses the no-improvement plateau by combining the three fixes:
+#   #1 deep search: use_mcts_tree=True (multi-ply KR-UCT, value-model-FREE terminal MC-rollout leaves)
+#   #3 policy_bc=0: pure search distillation (let the policy move off the prior)
+#   value-model-free distillation target (addresses "value model does double duty")
+# Inherits full-sheet path defaults (prior_policy_ckpt=human_prior_fullcov_fullsheet, human_csv, value data).
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+loss:
+  policy_bc: 0.0            # #3: pure search distillation
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false    # value head trains on the real ValueDiff buffer
+  consistency: 1.0
+  outcome: 0.0
+replay:
+  unroll_steps: 5
+  mix_human: 0.0            # policy_bc=0 -> human BC records contribute nothing; drop them
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 96
+  diverse_candidates: 96
+  soft_topk: 24
+  noise_samples: 8
+  rollout_greedy_steps: 5
+  use_mcts_tree: true       # #1: real multi-ply KR-UCT tree
+  mcts_sims: 96
+  mcts_k_widen: 2.0
+  mcts_alpha_widen: 0.5
+  mcts_uct_c: 0.6
+  rollout_temp: 0.6
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 2
+  max_horizon: 5            # h = 2,3,4,5 (4 horizons)
+  rounds_per_stage: 1
+  roots_per_stage: 64
+  include_preplaced: false
+  converge_band: 0.04
+  converge_patience: 2
+  h2h_games_per_order: 40

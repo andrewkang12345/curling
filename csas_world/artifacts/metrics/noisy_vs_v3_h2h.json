@@ -1,0 +1,16 @@
+{
+  "h04": {
+    "winrate": 0.5,
+    "winrate_order0": 0.05,
+    "winrate_order1": 0.95,
+    "mean_margin": 0.1125,
+    "n_ends": 80
+  },
+  "h08": {
+    "winrate": 0.5125,
+    "winrate_order0": 0.05,
+    "winrate_order1": 0.975,
+    "mean_margin": -0.3875,
+    "n_ends": 80
+  }
+}

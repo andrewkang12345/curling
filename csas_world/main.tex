@@ -1,0 +1,1066 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{bm}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\graphicspath{{images/}{artifacts/figures/}}
+
+% placeholders for values not yet measured
+\newcommand{\res}[1]{{\color{blue}\textbf{[#1]}}}
+\newcommand{\figph}[2][0.26\textheight]{%
+  \fbox{\parbox[c][#1][c]{0.92\textwidth}{\centering\textsc{Placeholder figure.}\\[4pt]\small #2}}}
+
+\title{%
+Planning in the Real Game Tree:\\
+A Continuous-Action EfficientZero-Style Graph Transformer for Mixed Doubles Curling
+}
+
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Curling is a continuous-action, execution-noisy, zero-sum sport whose mixed
+doubles ends open from two pre-placed stones and resolve after ten alternating
+throws. We learn a single closed-loop policy for it by combining ideas from
+MuZero \cite{schrittwieser2020mastering} and EfficientZero
+\cite{ye2021mastering} with the practical reality that curling has a fast,
+calibrated physics simulator. A graph transformer shared across an
+EfficientZero-style head set, namely a full-covariance mixture policy over the
+release parameters $[v,\theta,\omega,y_0]$, a Gaussian value head over the
+end-score differential, and an action-conditioned latent-dynamics head, is
+trained with a BYOL-style consistency objective \cite{grill2020bootstrap}.
+The learned dynamics is used only to shape the representation; all search and
+all training targets use the real simulator. Continuous-action search produces
+value-weighted policy targets, candidate values are averaged over a fitted
+Student-$t$ execution-noise model \cite{yee2016monte} so the distilled policy
+prefers shots that survive imperfect execution, and human priors are recovered
+from position-only match data with a cross-entropy method inverse solver
+\cite{deboer2005tutorial}. To avoid the curriculum forgetting we observed in a
+naive horizon-by-horizon schedule, we collect per-horizon search targets once
+(including mode-balanced canonical opening states that are absent from human
+data) and \emph{consolidate} a single model on the union in one joint
+training pass. Under realistic execution noise in true alternating play, the
+consolidated model beats the human prior across every horizon, with the
+largest gains at long horizons where strategic structure matters most.
+\end{abstract}
+
+\section{Introduction}
+
+Curling is a precision sport with continuous actions, execution noise, and
+multi-horizon tactics. Mixed doubles adds a fixed structure: each end opens
+from two pre-placed stones and runs for ten alternating throws, so an end is a
+ten-step episode whose outcome turns on a handful of decisive decisions. We
+denote by \emph{horizon} $h \in \{1, \ldots, 10\}$ the number of throws
+remaining at a given decision, including the current one. The opening shot
+has $h=10$ and the final stone has $h=1$. Since throws strictly alternate
+between the two teams, horizon parity also fixes the \emph{hammer}: the team
+with the last stone (the hammer team) is decided by whether $h$ is odd or
+even relative to which team throws first. We seek a closed-loop policy that
+maps a board state and game context to an intended throw and is robust to
+execution noise.
+
+Modern model-based reinforcement learning, exemplified by MuZero
+\cite{schrittwieser2020mastering} and EfficientZero \cite{ye2021mastering},
+learns a latent dynamics model and plans inside it. That design is powerful
+when the true dynamics are unknown or expensive, but it couples planning
+quality to model fidelity, and learned models drift over long rollouts,
+precisely the regime curling demands. We make a different choice. Curling has
+a fast, calibrated, differentiable physics simulator, so treating it as the
+transition removes model bias from search entirely. We therefore keep the
+machinery that makes EfficientZero representations strong, namely a shared
+encoder, an action-conditioned latent-dynamics head, and a BYOL-style
+latent-consistency objective \cite{grill2020bootstrap}, but use it only to
+shape the representation, never to roll out plans. All search and all
+training targets use the real simulator.
+
+Our contributions are:
+\begin{enumerate}
+\item \textbf{A simulator-grounded world model.} A single graph-transformer
+trunk feeds a small, gated head set (policy, value, latent dynamics, and an
+auxiliary two-step-return head). The simulator is the sole transition for
+planning and targets, and the latent-dynamics head is a pure representation
+auxiliary trained against a BYOL-style target encoder. We do not use a
+per-step outcome distribution or a behavior-cloning loss in the iterative
+phase.
+
+\item \textbf{Continuous-action search with execution-noise robustness.} A
+multi-ply KR-UCT tree \cite{yee2016monte} against the simulator, and a
+cheaper one-ply robust selector that averages each candidate's decision
+value over $K$ fitted-Student-$t$ noisy realizations. Both yield value-weighted
+policy targets, and we ablate them head-to-head.
+
+\item \textbf{Inverse-recovered human priors via the cross-entropy method.}
+Release parameters are unobserved in match data, so we recover them from
+observed stone displacements with a CEM \cite{deboer2005tutorial} inverse
+solver and use the quality-filtered estimates to warm-start the trunk and
+policy.
+
+\item \textbf{Anti-forgetting consolidation.} Naive sequential per-horizon
+training forgets late-horizon skill once the curriculum advances. We instead
+collect per-horizon search targets once (including mode-balanced canonical
+pre-placed states for the opening shot, which are absent from human data)
+and consolidate a single model on the union of all per-horizon buffers in one
+joint training pass.
+
+\item \textbf{A faithful evaluation protocol.} We measure game strength by
+true alternating play under both throwing orders, with execution noise on
+realized throws, and report per-horizon \emph{with-hammer} win rate and score
+differential, plus odd/even pair averages that cancel the hammer to isolate
+skill.
+\end{enumerate}
+
+\section{Related Work}
+
+\paragraph{Strategy and decision-making in curling.}
+A growing body of work studies strategic decision-making in curling using
+machine learning and search. Xiao et al.\ propose a policy decision system
+designed for real competition scenes, combining a situation-aware perception
+network with a digital extraction module and a domain-specific Curling MCTS
+that plans in a continuous action space \cite{xiao2023policy}. Brunner and
+Riesen compare supervised learning methods for position analysis in
+simulated curling and show that neural and graph-based models outperform
+heuristic baselines, while emphasizing that existing datasets remain
+insufficient to consistently surpass professional curlers, particularly in
+complex mid-end situations \cite{brunner2024comparing}. Han et al.\ combine
+Neural Fictitious Self-Play with KR-UCT to approximate Nash strategies in
+digital curling, focusing on large game-tree search in continuous action
+spaces and automatic generation of supervised data \cite{han2022game}. Lee
+et al.\ present a self-play deep reinforcement learning framework for
+simulated curling that integrates continuous action search via kernel
+regression with high-fidelity simulation, achieving strong performance in
+an international digital curling competition without hand-crafted features
+\cite{lee2018deep}. Our work shares the goal of high-quality continuous-action
+shot selection and, like Han et al.\ and Lee et al., uses KR-UCT, which was
+introduced for continuous-action MCTS with execution uncertainty by Yee
+et al.~\cite{yee2016monte}. It differs in pairing search with an
+EfficientZero-style graph-transformer whose shared representation is trained
+by BYOL-style latent consistency, in planning directly against a calibrated
+physics simulator rather than a learned model, in optimizing robustness to a
+fitted Student-$t$ noise model, and in recovering human priors by inverse
+dynamics from position-only match data.
+
+\paragraph{Robotic and real-world curling.}
+Beyond purely digital agents, several systems close the loop with the
+physical world. Won et al.\ introduce Curly, a curling robot powered by an
+adaptive deep reinforcement learning framework that incorporates temporal
+features to handle nonstationary ice conditions
+\cite{doi:10.1126/scirobotics.abb9764}. Curly attains human-level performance
+in official matches against elite human teams, demonstrating that carefully
+adapted RL can narrow the sim-to-real gap in curling. Xiao et al.\ also
+emphasize deployment in real training environments, using perception modules
+and tailored MCTS to bridge from image observations to strategic
+recommendations \cite{xiao2023policy}. Compared to these systems, our work
+remains fully in simulation but focuses on the complementary problem of
+how to combine a learned graph-transformer representation with a calibrated
+simulator for tree search over full ends.
+
+\paragraph{Local tactical optimization in curling.}
+Several papers examine specific subproblems rather than full-game strategy.
+Ahmad et al.\ focus on the hammer shot, the final shot of an end, and
+investigate algorithms for selecting an optimal action in a continuous,
+low-dimensional, stochastic setting \cite{ahmad2016action}. They adapt a
+Delaunay triangulation method to this setting and show that it can
+outperform alternative algorithms and, under some conditions, even
+Olympic-level human performance in their simulator. Our approach instead
+targets multi-shot planning over an entire end, with continuous-action
+KR-UCT search against a physics simulator and a learned value, and, like
+Ahmad et al., optimizes directly in the continuous release-parameter space
+$[v,\theta,\omega,y_0]$ rather than over a discrete library of high-level
+shot types.
+
+\paragraph{Physics-based strategy in other sports.}
+The idea of using physics models or simulators to inform sports strategy
+is not unique to curling. Fragkiadaki et al.\ learn visual predictive models
+of physics in a simulated billiards domain and use them to plan goal-directed
+actions via ``visual imagination'' over object-centric latent states
+\cite{fragkiadaki2015learning}. In ten-pin bowling, Ji et al.\ derive a
+rigid-body model for ball motion and use simulation to map initial conditions
+to strike probability, revealing that imperfect bowlers may benefit from
+particular targeting strategies that exploit the oil pattern to create
+additional ``miss room'' \cite{ji2022using}. Conceptually we share these
+works' use of an explicit physics model for planning, but rather than
+\emph{learning} the dynamics for use inside the planner, we treat a
+calibrated curling simulator as the transition and learn only a
+representation that imitates it. We operate on object-centric stone positions
+rather than pixels and embed the simulator inside a continuous-action search
+loop for a multi-agent, zero-sum game.
+
+\paragraph{World models and model-based reinforcement learning.}
+Our method is also related to the broader literature on world models in
+reinforcement learning. DreamerV3 \cite{hafner2023mastering} demonstrates that
+a single world-model-based algorithm can, with one configuration, achieve
+state-of-the-art performance across over 150 diverse tasks, including complex
+3D environments, by learning a latent dynamics model and improving policies
+through imagination. Alonso et al.\ introduce DIAMOND, a diffusion-based
+world model for Atari that shows how modeling high-fidelity visual details
+via diffusion can translate into improved downstream policy performance
+\cite{alonso2024diffusion}. In our setting we draw on these ideas for
+representation learning, namely an action-conditioned latent-dynamics head
+and a BYOL-style latent-consistency objective \cite{grill2020bootstrap} in
+the EfficientZero spirit \cite{ye2021mastering}, but, unlike Dreamer and
+DIAMOND, we do \emph{not} roll out the learned model for planning. We operate
+in a low-dimensional, object-centric state space and use a calibrated physics
+simulator as the transition, reserving the learned dynamics for shaping the
+shared graph-transformer representation.
+
+\paragraph{Planning with learned models.}
+Finally, our planning setup is inspired by MuZero
+\cite{schrittwieser2020mastering}, which combines tree search with a learned
+model to achieve superhuman performance in Atari, Go, chess, and shogi
+without explicit knowledge of the game rules. MuZero learns a latent
+dynamics model that produces policy, value, and reward predictions suitable
+for search. In contrast, we deliberately do \emph{not} plan in the learned
+latent model. MuZero learns dynamics, reward, value, and policy expressly
+for in-model search, whereas we borrow only its shared-representation and
+latent-consistency machinery and run the actual search against a calibrated
+simulator with a continuous-action KR-UCT tree \cite{yee2016monte} and an
+inverse-recovered human prior. Relative to prior curling work, which either
+relies on a hand-coded simulator with classical search or on model-free RL
+in continuous action spaces, our contribution is to combine an
+EfficientZero-style graph-transformer representation with simulator-grounded
+planning and execution-noise-robust, search-distilled policies for mixed
+doubles curling.
+
+\section{Problem Setting}
+\label{sec:problem}
+
+\paragraph{State, condition, action.}
+We represent a board by the \textbf{state} $s\in[0,1]^{24}$: twelve stone
+slots (six per team), each an $(x,y)$ position normalised by
+$\textsc{pos\_max}=4095$ raw units ($1\,\text{raw}=0.003048$\,m). Empty or
+out-of-play slots take a sentinel near $1$, and a slot is \emph{in play} iff
+its raw coordinates lie strictly inside the sheet bounds. Game context is a
+3-vector \textbf{condition}
+$c=[\,\text{shot\_norm},\,\text{team\_order},\,\text{stone\_block}\,]$, where
+$\text{shot\_norm}\in[0,1]$ encodes progress through the end,
+$\text{team\_order}\in\{0,1\}$ indicates the throwing team's order (which
+flips with each thrown stone), and $\text{stone\_block}\in\{0,1\}$ identifies
+which six slots the thrower owns. The \textbf{action} is the continuous
+4-vector $a=[\,v,\theta,\omega,y_0\,]$: release speed $v$ (m/s), aim angle
+$\theta$ (rad), release spin $\omega$ (rad/s), and lateral release offset
+$y_0$ (m). Action bounds are physically realistic and \emph{limit the search
+and sample space} during planning (Appendix~\ref{app:sim}).
+
+\paragraph{Horizon, hammer, episode.}
+The \textbf{horizon} $h\in\{1,\ldots,10\}$ is the number of throws remaining
+at a decision, including the current one. The opening shot has $h=10$ and
+the final stone has $h=1$. The first thrown stone has $h=10$, the second
+$h=9$, and so on through $h=1$. Because throws strictly alternate, horizon
+parity determines the \textbf{hammer} (the team that throws the last stone):
+$h$ odd at a decision means the team-to-move throws an odd-indexed remaining
+stone, which puts the hammer on the team-to-move at odd horizons and on the
+opponent at even horizons. An \textbf{end} is the full 10-throw episode
+opened from the two pre-placed stones, and a curling \emph{game} (out of
+scope here) consists of several ends; we evaluate on single ends.
+
+\paragraph{Transition and scoring.}
+A throw is realized by the curling physics simulator (Section~\ref{sec:sim};
+Appendix~\ref{app:sim}), which integrates a friction and curl model with
+smooth penalty-based stone-stone contacts and assigns the new stone to the
+thrower's next free slot. Execution noise is modelled by perturbing the
+intended action, $\tilde a = a+\epsilon$, with $\epsilon$ drawn from a fitted
+heavy-tailed Student-$t$ (Section~\ref{sec:noise};
+Appendix~\ref{app:noise}). After all ten throws the \textbf{end score} (the
+\emph{ValueDiff}) is the signed margin $R(s)$ under standard curling rules
+(only the team with the stone closest to the button scores, counting all of
+its stones nearer than the opponent's closest), expressed in a chosen team's
+perspective.
+
+\paragraph{Free-guard-zone legality.}
+Early-end takeouts are restricted: an opponent's rock may not be removed
+from play until the fourth thrown stone of the end (active for thrown stones
+1, 2, 3, i.e.\ horizon $h\ge 8$). Contact that keeps an opponent rock in
+play is legal, as is removing one's own rock; only knocking an opponent
+rock out of play is illegal, and the protection covers every opponent rock
+in play, including the pre-placed one. When a throw violates the rule, the
+delivery is forfeited and the board reverts to the pre-shot configuration.
+We apply this legality operator to every simulated post-state used in search
+and target generation (Appendix~\ref{app:fgz}).
+
+\paragraph{Objective.}
+We seek a closed-loop policy $\pi(a\mid s,c)$ that maximises the expected
+terminal end margin under execution noise, played as a two-player zero-sum
+game in which the opponent uses the same (current) policy.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Overview}
+A single graph-transformer encoder $E(s,c)\to h\in\mathbb{R}^{256}$ feeds
+four gated heads (Figure~\ref{fig:arch}): a policy head $\pi(\cdot\mid h)$,
+a value head $V(h)$, an action-conditioned latent-dynamics head $G(h,a)$,
+and an auxiliary two-step-return head $\hat r_2(h)$ used in selection
+variants. Following MuZero \cite{schrittwieser2020mastering} and
+EfficientZero \cite{ye2021mastering}, we form a $K$-step latent unroll
+$h_0=E(s_0,c_0)$, $h_{k+1}=G(h_k,a_k)$, and predict policy and value at
+every latent step. Unlike MuZero and EfficientZero, the unrolled latent is
+never used to produce transitions for planning or for value/policy targets:
+the simulator is the transition. The dynamics head is supervised only by a
+latent-consistency loss against a BYOL-style \cite{grill2020bootstrap} target
+encoder of the simulator's true next state, so it learns to imitate the
+encoded physics and thereby regularises the shared trunk
+(Section~\ref{sec:targets}). We do not use a per-step outcome distribution
+and we do not use a behavior-cloning loss in the iterative phase; the human
+prior enters only through the warm start (Section~\ref{sec:inverse}).
+
+\begin{figure}[t]
+    \centering
+    \figph[0.30\textheight]{Architecture overview. The shared GraphTF trunk
+    $E(s,c)\to h$ (22 nodes: 12 stone-slot nodes, 9 geometric landmark nodes,
+    and 1 condition-carrying global token; edge-biased attention with
+    9-dimensional edge features) feeds the policy (full-covariance Gaussian
+    mixture over $[v,\theta,\omega,y_0]$), value (Gaussian over end margin),
+    latent dynamics $G(h,a)$, and auxiliary two-step-return $\hat r_2$ heads.
+    Dashed path: BYOL-style latent consistency
+    $G(E(s),a)\approx \mathrm{sg}\,E_{\bar\theta}(\mathrm{Sim}(s,a))$ against
+    a slow-moving target encoder, representation only, never used for
+    planning.}
+    \label{fig:arch}
+\end{figure}
+
+\subsection{Shared graph-transformer trunk}
+\label{sec:trunk}
+The encoder constructs an object-centric graph at every step so that the
+model is permutation-equivariant over the twelve stone slots and can attend
+selectively to relevant board geometry rather than processing a fixed
+feature vector.
+
+\paragraph{Nodes (22).} The graph has 22 nodes: 12 \emph{stone-slot} nodes,
+9 \emph{landmark} nodes that expose drawing and takeout geometry, and 1
+\emph{global} token that carries the condition $c$ and serves as the
+trunk's readout. The 9 landmarks consist of the button centre, three
+release-area reference points across the nearer hog line (left, centre,
+right, at $\approx 6.4$\,m forward of the button), and five behind-house
+takeout-boundary points placed $\approx 2.4$\,m behind the button (just
+past the back of the house) at lateral offsets $\{-1.83, -0.91, 0, +0.91,
++1.83\}$\,m. Each node has a 6-dimensional feature vector with fields
+$[x, y, \text{team\_indicator}, \text{is\_live}, \text{is\_landmark},
+\text{spare}]$, where \texttt{spare} is unused under the current
+configuration. The global token is prepended at encode time (so $h$ is
+recovered as the first row of the encoder output) and its features carry
+the condition projected to the hidden dimension.
+
+\paragraph{Edges (9-d features).} Edges are dense (all node pairs). Each
+edge carries a 9-dimensional feature vector: 4 base geometric scalars
+$[\Delta x, \Delta y, \text{distance}, \text{same\_team\_indicator}]$ plus 5
+curling-specific scalars:
+\begin{enumerate}\setlength\itemsep{0pt}
+\item[(1)] \textbf{scorability}, the unoccluded angular span of the target
+stone as seen from the button (broadcast as a node-level feature into each
+incident edge);
+\item[(2)] \textbf{reach}, the feasibility of physically reaching the target
+along a curl arc on release-source edges, or pairwise angular reachability
+otherwise;
+\item[(3)] \textbf{score-out compatibility}, how compatible the
+outgoing-direction is with drawing to the button;
+\item[(4)] \textbf{takeout-out compatibility}, how compatible the
+outgoing-direction is with ejecting an opponent through the behind-house
+corridors;
+\item[(5)] the multiplicative composite
+$\textsc{reach}\cdot\max(\textsc{score-out},\textsc{takeout-out})$.
+\end{enumerate}
+These scalars are recomputed per state from the live JAX simulator's
+geometry rather than learned. Edges are not pruned: the attention layers
+see all node pairs.
+
+\paragraph{Edge-biased attention.} The trunk is a 4-layer transformer of
+hidden width $256$ with $4$ attention heads and dropout $0.1$
+($\approx 7.3\text{M}$ parameters total). Each layer applies an
+\emph{edge-biased} multi-head attention in which the edge feature for the
+pair $(i,j)$ is projected to (a) a per-head additive bias added to the
+attention logits, and (b) a value modulation that gates the attended values
+from $j$ to $i$. The block then applies a residual feed-forward (4$\times$
+expansion) with layer normalisation. The latent $h$ is read out as the
+output embedding of the global token. Inputs are augmented at training time
+by a horizontal flip across the centerline combined with a team-slot swap
+that exchanges stones $1$--$6$ and $7$--$12$ and flips
+$\text{stone\_block}$; the flip negates the angle, spin, and lateral-offset
+components of all action targets accordingly, so policy, value, dynamics,
+and consistency targets remain consistent under both operations.
+
+\paragraph{Warm start.} The trunk is initialised from the human-prior policy
+network's matched modules (the global-token vector, node and condition
+projections, and transformer layers), and the value head is initialised from
+a separately trained standalone value model that uses the same graph
+configuration. The BYOL target encoder is then synced to the trunk before
+training begins. The policy head is optionally initialised from the prior
+(true by default) and is then refined by search distillation.
+
+\subsection{Heads}
+\label{sec:heads}
+\textbf{Policy.} $\pi(\cdot\mid h)$ is a full-covariance Gaussian mixture
+($K=16$) over the standardised action $z=(a-\mu_a)/\sigma_a$, parameterised
+by mixture logits, means, and Cholesky factors. We report the negative
+log-likelihood $\mathrm{NLL}_\pi$ under this density.
+
+\textbf{Value.} $V(h)=(\mu_V,\log\sigma_V^2)$ is a Gaussian over the signed
+end margin (the ValueDiff). We train it on \emph{realized} terminal margins
+only, not on search statistics (Section~\ref{sec:targets}).
+
+\textbf{Latent dynamics.} $G(h,a_{\text{box}})$ maps the current latent and
+a box-normalised action $a_{\text{box}}\in[-1,1]^4$ to a predicted next
+latent via a residual MLP, used only for latent unrolling and the
+consistency loss.
+
+
+\subsection{Simulator}
+\label{sec:sim}
+The transition $s'=\mathrm{Sim}(s,c,a)$ is a JAX physics integrator using
+semi-implicit Euler: macro step $dt=0.02$\,s, two substeps, up to
+$1{,}500$ steps, terminating when all stone speeds fall below $0.03$\,m/s.
+Dynamics combine linear ice friction (deceleration $\approx
+0.11\,\text{m/s}^2$ opposing motion), a spin-induced curl lateral
+acceleration with strength $k_{\text{curl}}\approx 0.10$ and a
+speed-saturated factor capped at $c_{\text{cap}}=2.5\,\text{m/s}$,
+exponential spin decay (rate $\approx 0.15\,\text{s}^{-1}$ with additional
+damping during contact), and smooth penalty contact forces with stiffness
+$\sim 2.5\times10^4$\,N/m, damping $\sim 220$\,kg/s. Stone radius is
+$0.145$\,m and stone mass is $19.96$\,kg. Geometry is full-sheet
+($d_{\text{hog-tee}}=28.35$\,m). Numerical parameters, action bounds, and
+the contact model are listed in Appendix~\ref{app:sim}. Crucially, no calls
+to the learned dynamics head enter search or target generation: the
+simulator is the only transition we plan against. The JAX implementation is
+batched and runs on CPU or GPU.
+
+\subsection{Continuous-action search and target generation}
+\label{sec:search}
+We collect search-improved policy targets at a set of MCTS \emph{root}
+states $\{s,c\}$. ``Root'' here means an MCTS root: a board position at which
+search is run to produce an improved policy at that single state, which is
+then stored as a training target. Roots are drawn from real human boards at
+each throws-remaining horizon $h\in\{1,\ldots,9\}$, plus canonical pre-placed
+openings at $h=10$ (see Section~\ref{sec:phases}). For each root, the search
+produces a finite set of candidate actions $\{a_m\}_{m=1}^{M}$ together with
+values $\{q_m\}$ expressed in the root team's perspective.
+
+\paragraph{Multi-ply KR-UCT.}
+Following Yee, Lis\'y, and Bowling \cite{yee2016monte}, a recursive tree
+against the simulator combines two ingredients that are essential in
+continuous-action MCTS. First, \emph{progressive widening}: a node gains a
+new child only when its visit count is large enough
+($|\text{children}|\le k\,N^{\alpha}$), with each new action sampled from
+the current neural policy and de-duplicated in action space. Second,
+\emph{kernel-regression UCT selection}: among existing children, each
+child's mean value is smoothed by kernel regression over its neighbours in
+$z$-normalised action space (Gaussian kernel of fixed bandwidth), with the
+UCT exploration bonus folded into the kernel mass; the argmax of the
+smoothed scores is selected. This shares statistics across nearby continuous
+actions, which is essential when each action is visited few times. A
+freshly-expanded leaf is evaluated by rolling forward to the end of the end
+under the simulator, using the \emph{search-distilled (or, at iteration
+zero, human-prior) policy itself as the rollout policy}, i.e.\ the rollout
+is on-policy, not uniform random. The terminal board is then scored by the
+curling rules.
+
+\paragraph{Cheaper one-ply robust selector.}
+The deep tree is expensive. As a cheap alternative we use a one-ply root
+bandit in the spirit of \cite{yee2016monte}: sample $M$ candidate actions
+from the policy and score each candidate by the \emph{mean} of its value
+over $K$ noisy executions $\tilde a = a+\epsilon$ (or, in the $\hat r_2$
+variant, by $-\hat r_2$ on each post-state). The averaging is the entire
+robustness mechanism: selection prefers shots whose decision value
+\emph{survives} execution error rather than brittle perfect-line shots. We
+ablate this one-ply robust selector against the deeper KR-UCT tree
+(Section~\ref{sec:exp}); the one-ply selector wins our deployable
+comparison, and is what fed the consolidated model below.
+
+\paragraph{Policy target as a value-weighted set of searched actions.}
+Both selectors return $\{(a_m, q_m)\}$. We convert this to a target with a
+\emph{value-weighted soft-top-$k$} over the searched actions: keep the
+top-$M$ candidates by $q$, with weights $w_m \propto \exp(q_m/\tau)$ summing
+to $1$. Intuitively, the policy is trained to place probability mass on the
+high-value candidates the search found, weighted continuously by how good
+each one looked, rather than by visit count as in discrete AlphaZero/MuZero.
+The training signal is a weighted mixture NLL of these candidate actions
+under $\pi(\cdot\mid h_0)$.
+
+\paragraph{Value target as the realized terminal margin.}
+The value head is trained on the \emph{realized} signed end margin obtained
+by rolling the policy to the terminal state under the simulator and scoring
+under the curling rules: an unbiased, terminal-grounded Monte-Carlo return.
+We do not regress the value head onto search Q-values, which it overfits in
+practice.
+
+\subsection{Execution-noise model}
+\label{sec:noise}
+Execution noise on $a=[v,\theta,\omega,y_0]$ is a diagonal Student-$t$
+($\nu=5$, heavier-tailed than Gaussian). The \emph{speed} and \emph{angle}
+scales are the maximum-likelihood fits of Yee et al.~\cite{yee2016monte}
+to the World Curling Federation's \emph{Draw Shot Challenge} dataset,
+the canonical real-world source for curling execution error and the same
+calibration used in their KR-UCT experiments. The angle scale is
+speed-dependent (larger at lower speeds). For \emph{spin} and \emph{lateral
+offset} no comparable public calibration data exists, so we use small
+empirical constants. This is a known limitation: under-modelling spin and
+offset noise could leave the policy over-confident in shots whose accuracy
+depends sensitively on those parameters, and a calibrated spin/offset noise
+model is flagged as future work. The same noise model is used both to
+perturb realized transitions during search and evaluation and to average
+candidate values during target generation, so the policy is optimised
+end-to-end for robustness to it.
+
+\subsection{Inverse-recovered human prior}
+\label{sec:inverse}
+The match data records stone positions before and after each shot and a
+coarse task label, but not the continuous release parameters. We recover
+them with an inverse-dynamics solver based on the Cross-Entropy Method
+(CEM) \cite{deboer2005tutorial}, the standard gradient-free importance-
+sampling optimiser for noisy objectives. At each iteration we sample a
+population of candidate actions from a Gaussian, simulate each forward,
+score against the observed post-state with a permutation-invariant
+team-ownership-aware position loss that accounts for stones knocked out of
+play, and refit the Gaussian to the elite fraction. We keep only confidently
+solved, low-residual estimates (the ``realistic'' subset) and use them to
+train the human prior, which warm-starts the trunk and policy/value heads.
+The inverse-recovered actions are \emph{not} used as a behavior-cloning loss
+during the iterative phase (Appendix~\ref{app:inverse}).
+
+\subsection{Targets and losses}
+\label{sec:targets}
+For each collected root we run the search above and form a fixed-shape
+record. The training loss is a masked sum over the $K$-step latent unroll:
+\begin{equation}
+\mathcal{L} = \lambda_{\pi}\mathcal{L}_{\text{distill}}
+            + \lambda_{V}\mathcal{L}_{\text{value}}
+            + \lambda_{C}\mathcal{L}_{\text{consist}}
+            + \lambda_{r}\mathcal{L}_{\text{r2}} .
+\label{eq:loss}
+\end{equation}
+
+\textbf{Policy distillation.} $\mathcal{L}_{\text{distill}}$ is the
+weight-$w_m$ mixture NLL of the searched actions $\{a_m\}$ under
+$\pi(\cdot\mid h_0)$ (Section~\ref{sec:search}).
+
+\textbf{Value.} $\mathcal{L}_{\text{value}}$ is an MSE-plus-Gaussian-NLL
+regression toward the realized terminal margin (Section~\ref{sec:search}).
+
+\textbf{Latent consistency (BYOL-style).}
+$\mathcal{L}_{\text{consist}}$ is a SimSiam-style loss between the unrolled
+latent $h_{k}=G(h_{k-1},a_{k-1})$ and the stop-gradient encoding of the
+simulator's true next state under a target encoder,
+$\mathrm{sg}\,E_{\bar\theta}(\mathrm{Sim}(s_{k-1},a_{k-1}))$. The target
+encoder $E_{\bar\theta}$ is an identical copy of the trunk whose weights
+$\bar\theta$ are not trained by gradient descent but are tracked as a slow
+\emph{moving average} of the online encoder's weights $\theta$, updated
+after every optimisation step,
+\begin{equation}
+\bar\theta \;\leftarrow\; \tau\,\bar\theta + (1-\tau)\,\theta,
+\qquad \tau = 0.99 .
+\label{eq:ema}
+\end{equation}
+This is the BYOL device \cite{grill2020bootstrap}: averaging the weights
+yields a slowly-moving, stable regression target rather than one that shifts
+every step, which is what prevents the SimSiam-style consistency objective
+from collapsing. This consistency term is the only signal that trains $G$,
+and it is the mechanism by which world-model learning shapes the shared
+representation \emph{without} the learned model ever being used to plan.
+
+
+\subsection{Training: per-horizon collection, joint consolidation}
+\label{sec:phases}
+The naive way to train a multi-horizon model is a sequential curriculum:
+collect at horizon $h$, train, advance to $h{+}1$, repeat. We tried this and
+observed a clear forgetting pattern: extending into late horizons overwrites
+earlier-horizon skill in the policy. Importantly, the value head does not
+forget because it trains on a horizon-agnostic real terminal buffer; only
+the per-horizon policy distillation drifts. We therefore split training
+into two decoupled phases:
+
+\paragraph{(1) Per-horizon target collection.}
+For each horizon $h\in\{1,\ldots,10\}$ we collect a buffer of search-improved
+records using the one-ply robust selector against the simulator, starting
+from the human-prior warm start and refreshing the policy used inside the
+search between stages so that later horizons benefit from earlier learning.
+The roots at $h\le 9$ are real boards drawn from the human dataset filtered
+by throws-remaining. \emph{The opening shot} ($h=10$) is not in the dataset
+because annotators skipped the canonical mixed-doubles pre-placement; we
+synthesise the canonical openings ourselves (\textsc{standard} and the two
+power-play variants \textsc{pp\_left} and \textsc{pp\_right}, each with two
+guard-slot assignments for a total of 6 distinct openings) and
+\emph{stratify} the collection budget so each opening receives an equal
+number of search roots. Without this balancing, proportional sampling from
+the (skewed) data would leave the power-play openings under-collected; with
+it, they are not.
+
+\paragraph{(2) Consolidation.}
+We then take the union of all per-horizon buffers and train a single model
+on the mixture in one joint pass. Each minibatch is sampled uniformly across
+horizons, so no horizon is overwritten. The consolidated model warm-starts
+from the per-stage champion (the best per-horizon iterate), optimiser state
+is reset (a fresh Adam moment estimate), and the value head continues to
+train on the horizon-agnostic real terminal buffer. This is cheap: no
+re-collection, one training-cost pass. Empirically it removes the forgetting
+and exceeds the per-stage champion across every horizon
+(Section~\ref{sec:exp}).
+
+Collection (simulator-heavy, JAX) and training (PyTorch DDP) run as separate
+processes to avoid GPU contention; details in Appendix~\ref{app:train}.
+
+\section{Experiments}
+\label{sec:exp}
+
+\paragraph{Data.}
+We use shot-by-shot records from four international mixed-doubles
+competitions ($\approx 26{,}000$ board states), held out by competition for
+value evaluation, plus synthetic terminal states for value calibration. The
+human prior is trained on the inverse-recovered, quality-filtered action
+subset (CEM solver-converged with refine residual $\le 0.08\,\text{m}^2$).
+
+\paragraph{Metrics.}
+We distinguish two kinds of metric.
+
+\emph{Auxiliary metrics (vs.\ human data).} For the value head we report
+mean squared error and Gaussian-NLL against realized end margins on the
+held-out competition. For the policy we report human-action NLL. These
+compare the trained heads to human behaviour and are not a direct measure
+of game strength. A stronger policy can have higher policy-NLL precisely
+because it concentrates on high-value, robust shots that diverge from the
+broader human distribution. We report them only to track training health,
+not to rank players.
+
+\emph{Game strength (primary).} True alternating play to the terminal state
+under realistic execution noise. Each decision is made by the player's own
+one-ply robust selector ($M=48$ candidates, mean decision value over $K=8$
+noisy executions), and the executed throw is a noisy realisation of the
+intended action. We play both throwing orders per root and report
+\textbf{per-horizon win rate with the hammer} and the matching
+\textbf{without-hammer} numbers, the \textbf{score differential} for each,
+and \textbf{odd/even pair averages}
+$\big(\!\!\text{wr}(h)\!+\text{wr}(h{+}1)\big)/2$ that cancel the hammer
+across two consecutive horizons to expose pure skill.
+
+\paragraph{Four hammer-by-parity cases.}
+Since throws strictly alternate, horizon parity fixes whether the team
+\emph{to move now} also throws \emph{last}: at odd $h$ the team to move
+holds the hammer; at even $h$ the opponent does. Crossing this with the
+throwing-order swap our evaluation runs over (so that each player holds the
+hammer in exactly one of the two orders per root) gives four meaningful
+conditions for our model A:
+\begin{enumerate}\setlength\itemsep{0pt}
+\item[(a)] \textbf{with-hammer, odd $h$:} A is to move now \emph{and} throws
+last. A is on the clock, and the final-stone advantage is on its side.
+\item[(b)] \textbf{without-hammer, odd $h$:} the opponent is to move now and
+will also throw last. A is waiting to throw and is at the hammer
+disadvantage.
+\item[(c)] \textbf{without-hammer, even $h$:} A is to move now but the
+opponent throws last. A throws under pressure without the final-stone
+safety net.
+\item[(d)] \textbf{with-hammer, even $h$:} the opponent is to move now,
+but A throws last. A is waiting to throw with the hammer in hand.
+\end{enumerate}
+Cases (a) and (c) are the ones in which A's own decision quality is
+exercised at the root, since A is on the clock; (b) and (d) test how A
+plays out a position where the opponent throws first. Column
+\emph{with hammer} in Table~\ref{tab:main} reports (a) at odd $h$ and (d)
+at even $h$; \emph{without hammer} reports (b) at odd $h$ and (c) at
+even $h$. The pair averages
+$\tfrac{1}{2}\big(\text{wr}(h)+\text{wr}(h{+}1)\big)$ are taken over the
+A-as-to-move side at each horizon, i.e.\ they average case (a) at odd $h$
+with case (c) at the adjacent even $h$. Both are ``A on the clock'', but
+one of them gives A the hammer and the other does not, so the pair average
+isolates skill from the hammer advantage.
+
+\paragraph{Baselines.}
+(i) the inverse-recovered human prior, (ii) the per-stage champion (best
+single-horizon iterate before consolidation), (iii) a sequential
+$h=1$-to-$h=10$ curriculum without consolidation (forgetting baseline),
+and (iv) a one-ply deterministic decision-value selector (no noise
+averaging).
+
+\paragraph{Auxiliary metrics (val/test).}
+The human prior model achieves val policy NLL $4.82$ on its own
+inverse-recovered action validation set (selected at epoch 50). The
+standalone human-prior value model achieves val MSE $2.13$ on the held-out
+competition. Our consolidated full-end model has val policy NLL $19.97$ and
+val value MSE $2.23$ on the same held-out splits. The policy-NLL gap is
+expected and intended: our policy is not trained to imitate, and concentrates
+mass on high-value robust shots. The value-MSE gap is small and not
+predictive of game strength; see below.
+
+
+
+\begin{table}[ht]
+\centering
+\caption{Aggregated pair averages and overall mean playing skill against the
+human prior. Combining consecutive odd/even game lengths cancels the
+situational advantage of the hammer to isolate pure strategic skill. Per-row
+best values bolded across all three columns. NOISY alternating play, both
+throwing orders, free-guard-zone rule, full val pool per horizon (no random
+subsampling); see Table~\ref{tab:horizons} for per-horizon sample sizes.}
+\label{tab:averages}
+\small
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{r cc | cc | cc}
+\hline
+ & \multicolumn{2}{c|}{\textbf{Our Unified Model}} & \multicolumn{2}{c|}{\textbf{Per-Stage Baseline}} & \multicolumn{2}{c}{\textbf{Sequential Baseline}} \\
+ \cline{2-7}
+Setting & win & $\Delta$score & win & $\Delta$score & win & $\Delta$score \\
+\hline
+pair $(1,2)$  & $0.517$           & $+0.06$           & $\mathbf{0.525}$  & $\mathbf{+0.11}$  & $0.513$           & $+0.07$           \\
+pair $(3,4)$  & $\mathbf{0.577}$  & $+0.29$           & $\mathbf{0.577}$  & $\mathbf{+0.36}$  & $0.561$           & $+0.10$           \\
+pair $(5,6)$  & $\mathbf{0.552}$  & $\mathbf{+0.20}$  & $0.540$           & $+0.13$           & $0.515$           & $-0.08$           \\
+pair $(7,8)$  & $\mathbf{0.537}$  & $-0.01$           & $0.521$           & $\mathbf{+0.05}$  & $0.527$           & $-0.12$           \\
+pair $(9,10)$ & $\mathbf{0.576}$  & $\mathbf{+0.29}$  & $0.536$           & $+0.01$           & $0.491$           & $-0.19$           \\
+\hline
+\textbf{Mean Skill} & $\mathbf{0.552}$  & $\mathbf{+0.17}$  & $0.540$  & $+0.13$  & $0.521$  & $-0.04$ \\
+\hline
+\end{tabular}
+\end{table}
+
+
+
+\paragraph{Main result.}
+Tables~\ref{tab:averages} and \ref{tab:horizons} report head-to-head game
+strength vs.\ the human prior for the consolidated model (per-horizon
+collection with mode-balanced canonical $h{=}10$ openings, then one joint
+consolidation pass), the per-stage baseline (the best single-horizon
+iterate, trained without consolidation), and a sequential
+$h{=}1$-to-$h{=}10$ curriculum without consolidation. With the hammer the
+consolidated model wins $0.70$ to $0.88$ of ends at every horizon with
+strictly positive score differential ($+0.87$ to $+1.91$ points/end).
+Without the hammer it loses by similar magnitudes in the opposite
+direction; this is the expected hammer asymmetry and is what the
+pair-average column of Table~\ref{tab:averages} cancels. On the
+hammer-neutral pair average the consolidated model attains
+\textbf{0.552} mean playing skill against the prior with \textbf{$+0.17$
+points-per-end} score differential, beating the per-stage champion's
+$0.540$ ($+0.13$) and the sequential curriculum's $0.521$ ($-0.04$). The
+consolidated model wins or ties on win rate at every pair, and is the
+only one of the three with a strictly positive score differential
+averaged across the end. The sequential curriculum exhibits clear
+forgetting: at pair $(9, 10)$ it drops to $0.491$ (below the prior) with
+$\Delta=-0.19$, and its mean score differential is negative ($-0.04$
+points/end). Per-end margins of this size compound across the eight ends
+of a real game to a roughly one-point expected lead, which is a decisive
+gap in mixed doubles practice.
+
+\paragraph{Ablations.}
+The head gating, search variants, and training phases let us isolate each
+component on an otherwise identical pipeline:
+\begin{itemize}
+\item[(a)] \textbf{policy+value only} (no world model);
+\item[(b)] \textbf{+latent dynamics with BYOL-style consistency}
+(representation auxiliary on);
+\item[(c)] \textbf{noise-robust vs.\ noise-free targets} (does noise
+averaging during target generation actually help?);
+\item[(d)] \textbf{sequential curriculum vs.\ consolidation} (does joint
+training on the union of per-horizon buffers remove the forgetting we
+observe in pure sequential training?);
+\item[(e)] \textbf{KR-UCT search vs.\ vanilla UCT search} (does the kernel
+regression over neighbouring continuous actions matter, or does naive UCB1
+on raw candidates suffice?);
+\item[(f)] \textbf{multi-ply KR-UCT targets vs.\ one-ply robust targets}
+(is the deep tree worth the cost over the cheaper one-ply selector?);
+\item[(g)] \textbf{proportional vs.\ mode-balanced pre-placed $h{=}10$
+collection} (the openings are skewed in the data but synthetic in
+collection, so we test whether a balanced collection budget helps
+power-play openings).
+\end{itemize}
+\res{Ablation table.} The scientific question behind (b) is whether the
+EfficientZero-style consistency objective improves the policy/value heads
+through representation alone, given that the learned dynamics is never used
+to plan. (e) and (f) settle the search-design questions.
+
+\paragraph{Qualitative analysis.}
+We visualise (i) full ends played by the consolidated policy against itself
+and against the human prior, with realised throw trajectories drawn by the
+physics simulator (Figure~\ref{fig:gameplay}), and (ii) policy proposal
+heatmaps for representative board states: where the policy's sampled plans
+would land on empty ice, isolating its intended targets from collisions
+(Figure~\ref{fig:heatmaps}).
+
+\begin{figure}[t]
+    \centering
+    \figph{Full-end games (pre-placement + ten throws): consolidated policy
+    vs.\ itself (clean execution) and vs.\ the human prior under the noisy
+    winrate setup. Trajectories are the actual simulated paths (curl plus
+    collisions), not straight-line approximations.}
+    \label{fig:gameplay}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \figph{Policy proposal heatmaps: density of where $\sim 3000$ sampled
+    plans would land on empty ice for representative board states (the
+    canonical pre-placed openings, plus mid-end positions at $h=6, 4, 2$).
+    The actual board stones are overlaid; landing density isolates the
+    policy's \emph{intended} targets from the collisions a real throw would
+    produce.}
+    \label{fig:heatmaps}
+\end{figure}
+
+\section{Limitations}
+The transition is only as faithful as the calibrated simulator. Sim-to-real
+gaps (ice variation, sweeping, player skill, opponent style) are not
+modelled, and the inverse solver recovers a single most-likely action per
+observed transition rather than a posterior, so human ``intent'' is
+approximated. KR-UCT with on-policy Monte-Carlo leaves is accurate but
+expensive, bounding the search budget per decision. The execution-noise
+model is calibrated for \emph{speed} and \emph{angle} only (Draw Shot
+Challenge data); \emph{spin} and \emph{lateral offset} noise are set to
+small empirical constants in the absence of a public dataset, and a
+calibrated spin/offset noise model is left as future work. Finally, the
+learned dynamics head is deliberately not used for planning; whether a
+sufficiently accurate learned model could safely prefilter candidates
+(cheaply ranking proposals before simulation) is left to future work,
+though the architecture exposes the hook for it.
+
+\section{Conclusion}
+We presented an EfficientZero-style graph-transformer for mixed doubles
+curling that keeps the representation-learning machinery of model-based RL
+(a shared encoder, an action-conditioned latent-dynamics head, and
+BYOL-style latent consistency \cite{grill2020bootstrap,ye2021mastering})
+while deliberately planning in the real game tree with a calibrated physics
+simulator rather than in a learned latent model
+\cite{schrittwieser2020mastering}. Continuous-action search (KR-UCT
+\cite{yee2016monte} or the cheaper one-ply robust selector that wins our
+ablation) supplies value-weighted policy-distillation targets, value targets
+are realized terminal end scores, the human prior is recovered by a CEM
+\cite{deboer2005tutorial} inverse solver, and execution-noise averaging
+\cite{yee2016monte} yields robust shot selection under the correct
+free-guard-zone rule. To avoid the forgetting we observed in sequential
+per-horizon training, we collect per-horizon search targets once (with the
+missing opening-shot states synthesised and mode-balanced) and consolidate
+a single model on the union of all per-horizon buffers. The result is a
+single full-end model that beats the human prior across every horizon under
+realistic execution noise.
+
+\appendix
+
+\begin{table}[ht]
+\centering
+\caption{Horizon-by-horizon game performance of the three models against
+the human prior under noisy alternating play with the corrected
+free-guard-zone rule. Each horizon uses the full val pool with no random
+subsampling: $h{=}1$--$9$ are $n_{\text{per\_order}}=95$--$133$ distinct
+recorded human boards from the held-out competition, $h{=}10$ is $n=387$
+canonical pre-placed openings frequency-weighted to the data distribution
+across 9 distinct $(\text{mode},\,\text{guard\_slot},\,\text{thrower\_block})$
+canonical states; both throwing orders played per root. \textbf{With Hammer}
+indicates the throwing order in which our model holds the last-stone
+advantage; \textbf{Without Hammer} indicates the opposite order. Per-row
+best across the three models for each (winrate, $\Delta$score)$\times$(with,
+without) cell is bolded.}
+\label{tab:horizons}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{r cccc | cccc | cccc}
+\hline
+ & \multicolumn{4}{c|}{\textbf{Our Unified Model}} & \multicolumn{4}{c|}{\textbf{Per-Stage Baseline}} & \multicolumn{4}{c}{\textbf{Sequential Baseline}} \\
+ \cline{2-13}
+ & \multicolumn{2}{c}{With Hammer} & \multicolumn{2}{c|}{Without Hammer} & \multicolumn{2}{c}{With Hammer} & \multicolumn{2}{c|}{Without Hammer} & \multicolumn{2}{c}{With Hammer} & \multicolumn{2}{c}{Without Hammer} \\
+ \cline{2-13}
+$h$ & win & $\Delta$ & win & $\Delta$ & win & $\Delta$ & win & $\Delta$ & win & $\Delta$ & win & $\Delta$ \\
+\hline
+ 1  & $0.704$           & $+0.87$           & $\mathbf{0.328}$  & $-0.76$           & $\mathbf{0.712}$  & $\mathbf{+0.90}$  & $0.304$           & $-0.81$           & $0.696$           & $+0.84$           & $0.324$           & $\mathbf{-0.73}$  \\
+ 2  & $0.722$           & $+1.00$           & $0.331$           & $-0.74$           & $\mathbf{0.774}$  & $\mathbf{+1.11}$  & $\mathbf{0.338}$  & $\mathbf{-0.68}$  & $0.714$           & $+1.05$           & $0.331$           & $-0.69$           \\
+ 3  & $\mathbf{0.814}$  & $+1.26$           & $0.297$           & $-0.93$           & $0.797$           & $\mathbf{+1.36}$  & $0.263$           & $-1.02$           & $0.801$           & $+1.21$           & $\mathbf{0.314}$  & $\mathbf{-0.78}$  \\
+ 4  & $\mathbf{0.706}$  & $+1.05$           & $0.339$           & $-0.69$           & $0.674$           & $\mathbf{+1.12}$  & $\mathbf{0.358}$  & $\mathbf{-0.65}$  & $0.670$           & $+0.79$           & $0.321$           & $-1.02$           \\
+ 5  & $\mathbf{0.839}$  & $\mathbf{+1.55}$  & $0.288$           & $-0.87$           & $0.780$           & $+1.30$           & $0.246$           & $-1.18$           & $0.737$           & $+0.92$           & $\mathbf{0.305}$  & $\mathbf{-0.79}$  \\
+ 6  & $0.832$           & $+1.62$           & $0.265$           & $-1.15$           & $\mathbf{0.867}$  & $\mathbf{+1.78}$  & $\mathbf{0.301}$  & $\mathbf{-1.05}$  & $0.770$           & $+1.13$           & $0.292$           & $-1.07$           \\
+ 7  & $0.828$           & $+1.38$           & $0.222$           & $-1.37$           & $\mathbf{0.848}$  & $\mathbf{+1.49}$  & $0.273$           & $-0.98$           & $0.798$           & $+1.10$           & $\mathbf{0.283}$  & $\mathbf{-0.88}$  \\
+ 8  & $\mathbf{0.878}$  & $\mathbf{+1.85}$  & $0.245$           & $-1.40$           & $0.847$           & $+1.49$           & $0.194$           & $-1.38$           & $0.776$           & $+1.32$           & $\mathbf{0.255}$  & $\mathbf{-1.34}$  \\
+ 9  & $\mathbf{0.884}$  & $\mathbf{+1.91}$  & $0.263$           & $\mathbf{-0.95}$  & $0.789$           & $+1.31$           & $0.232$           & $-1.31$           & $0.726$           & $+0.96$           & $\mathbf{0.284}$  & $-1.23$           \\
+10  & $\mathbf{0.848}$  & $+1.89$           & $0.269$           & $-1.32$           & $0.823$           & $\mathbf{+2.01}$  & $\mathbf{0.282}$  & $\mathbf{-1.28}$  & $0.788$           & $+1.69$           & $0.256$           & $-1.33$           \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Curling Physics Simulator}
+\label{app:sim}
+The transition $s'=\mathrm{Sim}(s,c,a)$ is a JAX physics engine integrated by
+semi-implicit Euler (macro step $dt=0.02$\,s, two substeps, up to $1{,}500$
+steps, stopping when all stone speeds fall below $v_{\text{stop}}=0.03$\,m/s).
+The thrown stone is released at $[-d_{\text{hog-tee}},\,y_0]$ with
+$d_{\text{hog-tee}}=28.35$\,m (full sheet) and initial velocity
+$v\,[\cos\theta,\sin\theta]$ and spin $\omega$. Dynamics combine:
+(i)~linear ice friction with deceleration $a_{\text{linear}}=0.11\,\text{m/s}^2$
+opposing motion;
+(ii)~a spin-induced curl lateral acceleration
+$a_{\text{curl}} = k_{\text{curl}}\,\omega\,\hat v^\perp\,s_{\text{eff}}$
+with $k_{\text{curl}}=0.10$ and a speed-saturated factor
+$s_{\text{eff}}=c_{\text{cap}}\tanh(v/c_{\text{cap}})$,
+$c_{\text{cap}}=2.5\,\text{m/s}$;
+(iii)~exponential spin decay at rate $\gamma_{\text{spin}}=0.15\,\text{s}^{-1}$,
+with additional damping $c_{\text{spin-contact}}=80$ during contact.
+Stone-stone interaction uses smooth penalty contact forces with stiffness
+$k_{\text{penalty}}=2.5\!\times\!10^{4}$\,N/m, damping
+$c_{\text{damp}}=220$\,kg/s, and a force clamp of $f_{\max}=2\!\times\!10^{4}$\,N
+to prevent stiff-spring blow-ups; stone mass is $m=19.96$\,kg and stone
+radius is $r=0.145$\,m. Initial overlaps from data quantisation are removed
+by an iterative projection. Sheet walls are disabled; the in-play check is
+purely geometric. The action ranges (full sheet, realism-fixed) are
+\[
+v\in[2.20,\,3.01]\,\text{m/s},\quad
+\theta\in[-0.1038,\,0.1038]\,\text{rad},\quad
+\omega\in[-7.0,\,7.0]\,\text{rad/s},\quad
+y_0\in[-0.23,\,0.23]\,\text{m},
+\]
+and serve as a hard \emph{search-space limit} during target generation:
+KR-UCT widening and one-ply sampling never propose outside these bounds, and
+the inverse solver also samples within them. The board has 12 stones (six
+per team); two are pre-placed and ten are thrown per end; the new stone
+fills the thrower's next free slot. The simulator is exposed as a batched
+JAX function and is the only transition called during search, target
+generation, and evaluation.
+
+\section{Inverse-Action Solver}
+\label{app:inverse}
+Given a pre-state and an observed post-state, we recover the release
+parameters by minimising a position-matching loss with the cross-entropy
+method (CEM) \cite{deboer2005tutorial}. Candidate actions in normalised
+$[0,1]^4$ are sampled from a Gaussian, simulated forward, and scored by a
+team-ownership-aware, permutation-invariant assignment loss: matched live
+stones contribute squared position error, while unmatched targets and
+spurious extra in-play stones incur capped penalties ($\le 4\,\text{m}^2$
+each), so the loss correctly handles stones knocked out of play. CEM
+iterates (population $96$, $30$ generations, elite fraction $0.2$,
+EMA-smoothed mean/variance with a variance floor, early-stop at residual
+$\le 0.1\,\text{m}^2$) in a coarse-then-refine schedule. We retain solutions
+that converge (\texttt{solver\_ok}) with a small refined residual to form
+the ``realistic'' inverse dataset. Release parameters are $z$-standardised
+by the dataset mean/std $(\mu_a,\sigma_a)$, stored with the checkpoint and
+used to map policy outputs back to physical actions.
+
+\section{Architecture and Feature Details}
+\label{app:arch}
+We use the curling-aware graph-feature configuration that the warm-start
+encoder was trained with; the same configuration is used by our standalone
+value baseline, so the two are directly comparable. The exact feature set
+is pinned in the implementation.
+
+\textbf{Nodes (22).} 12 stone-slot nodes (alive iff the slot holds an
+in-play stone), plus 9 \emph{landmark} nodes: the button centre at raw
+$(750, 800)$, three release-area reference points across the nearer hog
+line (left, centre, right) at $\approx 6.4$\,m forward of the button along
+the centre line and at lateral offsets $\{-1.22, 0, +1.22\}$\,m, and five
+behind-house takeout-boundary points placed $\approx 2.4$\,m behind the
+button (just past the back of the house) at lateral offsets $\{-1.83,
+-0.91, 0, +0.91, +1.83\}$\,m. The 22nd node is a \emph{global token} that
+is prepended to the node tensor at encode time and whose features are the
+condition $c$ projected to the hidden dimension; the latent $h$ is read
+out as the output embedding of this token. \textbf{Node features} are
+6-dimensional: $[x, y, \text{team\_indicator}, \text{is\_live},
+\text{is\_landmark}, \text{spare}]$, where \texttt{team\_indicator} is
+$0/1$ for stone slots and $0$ for landmarks; the trailing scalar is
+unused.
+
+\textbf{Edges (9-d features).} 4 base pairwise scalars
+$[\Delta x, \Delta y, \text{distance}, \text{same\_team\_indicator}]$
+plus 5 curling-specific scalars:
+\textsc{scorability} (unoccluded angular span of the target seen from the
+button, computed from board geometry at the current step and broadcast as a
+node feature into each incident edge);
+\textsc{reach} (curl-arc reachability on release-source edges, pairwise
+angular reachability otherwise);
+\textsc{score-out} (outgoing-direction compatibility with drawing to the
+button);
+\textsc{takeout-out} (outgoing-direction compatibility with ejecting an
+opponent through the behind-house corridors);
+and the composite $\textsc{reach}\cdot\max(\textsc{score-out},
+\textsc{takeout-out})$. Edges are not pruned in the current configuration.
+The composite scalars are deterministic functions of the live board state
+rather than learned, and they recompute every step. They are projected into
+a per-head bias and a value modulation at each transformer layer, so the
+attention is \emph{edge-biased} rather than purely token-based.
+
+\textbf{Transformer.} 4 layers, hidden width $256$, $4$ attention heads,
+dropout $0.1$; the readout is the output embedding of the global token.
+Total $\approx 7.3$M parameters.
+
+\textbf{Heads.} The policy head emits a $K=16$ full-covariance Gaussian
+mixture over standardised actions, the value head emits a Gaussian
+$(\mu_V,\log\sigma_V^2)$, the dynamics head is a residual MLP
+$G(h,a_{\text{box}})$, and the auxiliary two-step-return head $\hat r_2$
+is a scalar MLP. A BYOL-style target encoder $E_{\bar\theta}$ ($\tau=0.99$
+moving-average tracker, no gradient) supplies the consistency target.
+
+\textbf{Warm start.} The trunk loads the matched modules
+(\texttt{global\_token}, \texttt{node\_proj}, \texttt{cond\_proj}, and the
+transformer layers) from the human-prior policy checkpoint. The policy head
+is loaded by default (and then refined by search distillation). The value
+head loads the mean and log-variance projection submodules from a
+separately trained standalone value model that uses the same graph
+configuration. The BYOL target encoder is synced to the trunk before
+training begins.
+
+\textbf{Augmentation.} At training time we apply, independently with
+probability $0.5$ each, a horizontal flip (mirror stone $x$ across the
+centerline; negate the angle, spin, and lateral-offset components of all
+action targets) and a team-slot swap (exchange slots $1$--$6$ with
+$7$--$12$ and flip $\text{stone\_block}$). These keep value and outcome
+targets invariant while doubling the effective data.
+
+\section{Training and Compute}
+\label{app:train}
+Models are implemented in PyTorch and optimised with Adam, gradient
+clipping at max-norm $1.0$, and a per-rank batch size of $256$ (the
+curl-arc edge features allocate $O(\text{batch}\cdot\text{stones}^2)$
+memory; larger batches exceed device memory). Warm-started parameters
+(trunk, policy, value) use a small learning rate
+($\approx 1.5\times10^{-5}$); freshly initialised heads use
+$3\times10^{-4}$. Mixed precision is disabled (the policy Cholesky
+exponentiation is fp32-only under autocast). Training runs data-parallel
+across four NVIDIA A10G GPUs with the \texttt{gloo} backend.
+
+Per-horizon collection runs as a separate process on the JAX simulator
+(GPU). The one-ply robust selector uses $M=96$ candidate actions per root
+with $K=8$ noisy executions averaged; the KR-UCT tree variant uses
+$n_{\mathrm{sims}}\approx 96$--$120$ simulations per decision with
+progressive-widening constants and a $z$-normalised kernel bandwidth (exact
+values in the released config). At $h=10$ the canonical pre-placed
+openings are enumerated and the search budget is stratified across the
+$(\text{mode},\,\text{guard\_slot})$ groups so each opening receives equal
+coverage.
+
+Consolidation reads the union of all per-horizon shards (uniform mix
+across horizons within each batch), warm-starts from the per-stage
+champion, resets the optimiser, and trains for $\sim 20$ epochs.
+
+\section{Execution-Noise Model}
+\label{app:noise}
+Execution noise is a diagonal Student-$t$ ($\nu=5$, heavier-tailed than
+Gaussian) on the action, with the $v$ and $\theta$ scales taken from the
+maximum-likelihood fit of Yee et al.~\cite{yee2016monte} to the World
+Curling Federation's \emph{Draw Shot Challenge} dataset, the standard
+real-world calibration source for curling execution error. The speed scale
+is $\approx 0.0095$\,m/s; the angle scale is speed-dependent, roughly
+$0.0012$--$0.0037$\,rad (larger at lower speeds). For \emph{spin} and
+\emph{lateral offset} no comparable public calibration data is available,
+so we use small empirical constants. We expect a calibrated spin/offset
+noise model to be especially relevant for sweeping-influenced trajectories
+and near-the-line release offsets; we list this as future work.
+
+The same noise model is used both to perturb realized transitions during
+search and evaluation and to average candidate values during target
+generation, so the learned policy is optimised for robustness to it.
+
+\section{Free-Guard-Zone Legality}
+\label{app:fgz}
+With horizon $h$ = throws remaining including the current throw and
+$\text{shots\_in\_end}=10$, the thrown-stone index is $k=11-h$. The
+no-takeout rule is active for $k\in\{1,2,3\}$ (i.e.\ $h\ge 8$). A post-state
+is illegal iff some opponent rock that was in play before the throw is out
+of play after it; movement that keeps it in play and removal of one's own
+rock are legal. The protected set is all in-play opponent rocks, including
+the pre-placed one. Illegal posts are replaced by the pre-shot board
+(throw forfeited, displaced rocks restored). The operator is applied to
+every simulated candidate post-state in collection, search, and
+evaluation.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

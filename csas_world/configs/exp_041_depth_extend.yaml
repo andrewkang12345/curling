@@ -1,0 +1,66 @@
+# EXP-041 / az_v14d: DEPTH-EXTENDED capacity test — the champion's exact weights in a
+# d=256/L=8 trunk (layers 4-7 near-identity-initialized: zeroed W_o/ffn-out, identity
+# norms), fine-tuned on the az_v14 corpus with the az_v13-fixed recipe. Unlike the
+# 384-wide attempts (az_v14/a/b/c — all foundation-transfer failures), every champion
+# weight loads natively here; the only new content is 4 near-neutral layers (13.65M
+# total, 1.9x). Any gain over the champion = capacity effect with zero transfer risk.
+# vs exp_021_valuemcts_earlystop.yaml (the recipe every post-champion retrain used):
+#   * checkpoint_metric: val_policy_distill_mcts  — computed on the significance-FILTERED
+#     held-out partition, so best.pt = "matches the search where the search is significant"
+#     (fix 3: replaces val_value_mse_mcts, which we twice measured to be strength-misaligned).
+#   * early_stop_patience: 4  — val-driven early stopping: abort when the selection metric
+#     hasn't improved for 4 epochs (fix 2: exposure to VFM drift is stopped by the val signal,
+#     not an a-priori epoch cap; epochs=20 is now only a budget ceiling).
+#   * select_value_guard: 2.80     # slack for the post-LN perturbation re-calibration — an epoch is best.pt-eligible only if real-data val_value_mse
+#     stays within tolerance of the champion's (2.3987 + 0.3) (fix 2: drift guard as a
+#     selection CONSTRAINT, orthogonal to the stopping signal).
+# Fix 1 (flat-target erosion) lives in the DATA: artifacts/replay/az_v13_conf_{train,val}
+# have dist_mask zeroed on non-confident plies (built by _build_confident_buffers.py).
+model:
+  hidden_dim: 256
+  n_layers: 8
+  n_heads: 4
+  dropout: 0.1
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: true        # kept: self-play value targets are grounded MC returns (the compounding channel)
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+  reward_action_conditioned: false
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:                        # unused (no collection) — present for config validity
+  noise_config: configs/noise/v2_fullsheet.json
+  noise_samples: 8
+train:
+  epochs: 20                   # budget ceiling only; early stopping governs
+  batch_size: 256
+  samples_per_epoch: 90000
+  augment: true
+  gpus: [0, 1, 2, 3]
+  run_name: exp041_depth_extend
+  checkpoint_metric: val_policy_distill_mcts
+  early_stop_patience: 4
+  select_value_guard: 2.80     # slack for the post-LN perturbation re-calibration
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  include_preplaced: true
+  noisy_h2h: true

@@ -1,0 +1,61 @@
+# Controlled policy-improvement arm: corrected categorical end-outcome auxiliary.
+# Warm-start/resume is always from a trained WorldModel, so every trainable
+# parameter uses lr_pretrained and Adam state is retained between 5-epoch blocks.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_outcome: true
+  use_decoder: true
+  use_consistency: true
+  consistency_mode: simsiam
+  ema_decay: 0.99
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.0
+  value_nll: 0.2
+  value_from_mcts: false
+  outcome: 0.5
+  consistency: 1.0
+  decoder: 1.0
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.35
+  mix_sim: 0.10
+  mix_mcts: 0.55
+  value_use_synthetic: true
+search:
+  policy_candidates: 96
+  structured_candidates: 24
+  diverse_candidates: 96
+  local_candidates: 48
+  global_candidates: 16
+  temperature: 1.35
+  std_scale: 1.6
+  kernel_bandwidth: 0.18
+  uct_c: 0.02
+  soft_topk: 24
+  policy_temperature: 0.35
+  noise_config: configs/noise/v1_bowling.json
+  noise_samples: 8
+  rollout_greedy_steps: 2
+  use_learned_model_prefilter: false
+  terminal_rollout_scoring: false
+  use_mcts_tree: false
+train:
+  lr: 0.00002
+  lr_pretrained: 0.00002
+  warmup_steps: 0
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  epochs: 5
+  batch_size: 256
+  augment: true
+  samples_per_epoch: 120000
+  num_workers: 4
+  gpus: [0, 1]
+  ddp_backend: gloo
+  checkpoint_metric: none
+  run_name: anchor_iterative_outcome_on

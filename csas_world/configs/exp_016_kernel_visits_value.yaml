@@ -1,0 +1,64 @@
+# EXP-016: same KR-UCT kernel-effective visit-count W(a) POLICY target as EXP-015, PLUS the
+# kernel-regressed root value V̂_root = Σ_a W(a)V̂(a)/ΣW(a) as the VALUE target. The depth-1
+# bandit's value-head leaf + kernel regression produce a noise-robust root value estimate;
+# value_target_kernel_root=true writes it into the MCTS records and value_from_mcts=true makes
+# the value head train on it (vs EXP-015 which trains value only on the realized buffer).
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: false
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: true           # EXP-016: value head trains on the MCTS-record value target...
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.0
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  noise_samples: 1
+  policy_target_kernel_visits: true
+  search_root_only: true
+  value_target_kernel_root: true      # ...which EXP-016 sets to the kernel-regressed root value V̂_root
+  kernel_bandwidth: 0.30
+  policy_temperature: 1.0
+  soft_topk: 24
+  mcts_sims: 96
+  mcts_k_widen: 2.0
+  mcts_alpha_widen: 0.5
+  mcts_uct_c: 0.6
+  rollout_temp: 0.6
+  use_mcts_tree: false
+  terminal_rollout_scoring: false
+  reward_leaf_select: false
+  value_leaf_bootstrap: false
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 2
+  max_horizon: 5
+  rounds_per_stage: 2
+  roots_per_stage: 48
+  include_preplaced: false
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 30
+  noisy_h2h: true

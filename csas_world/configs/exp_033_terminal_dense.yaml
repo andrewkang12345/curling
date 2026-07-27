@@ -1,0 +1,70 @@
+# EXP-033 / az_v10 collect-time config: VALUE-FREE dense-candidate terminal-MC operator
+# (the backward-induction certification recipe).
+#
+# At every self-play ply: generate_candidates builds a DENSE proposal (48 policy samples
+# + 16 structured + 32 diverse-grid + 24 local perturbations + 8 global uniform ≈ 119
+# after dedup — eventually-dense coverage, unlike policy-only proposals), each candidate
+# is executed under k_ego=noise_samples=4 noise realisations and every realisation is
+# rolled by the CURRENT policy to terminal and scored by curling rules. Q = mean realized
+# margin. NO learned value model anywhere in the operator: convergence of a loop built on
+# this operator certifies un-improvability against the dense proposal at MC resolution,
+# with no (π,V) co-adaptation escape hatch.
+#
+# Smoke timing (az_v9/iter2 policy): h10 ≈ 35s, h6 ≈ 13s, h2 ≈ 2s → ~2.3 min per game.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 48             # dense proposal: policy...
+  structured_candidates: 16         # ...+ structured house shots
+  diverse_candidates: 32            # ...+ diverse grid
+  local_candidates: 24              # ...+ local perturbations of top seeds
+  global_candidates: 8              # ...+ uniform (density floor)
+  soft_topk: 24
+  noise_samples: 4                  # k_ego noisy executions per candidate
+  rollout_greedy_steps: 5
+  use_mcts_tree: false
+  terminal_rollout_scoring: true    # THE operator: MC rollouts to terminal + rule scoring
+  search_rollout_n: 1               # pure policy rollouts (value-model-FREE)
+  reward_leaf_select: false
+  collect_step_reward: true
+  rollout_temp: 0.6
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  rounds_per_stage: 2
+  roots_per_stage: 80
+  include_preplaced: true
+  converge_band: 0.04
+  converge_margin_band: 0.10
+  converge_patience: 2
+  h2h_games_per_order: 80
+  noisy_h2h: true

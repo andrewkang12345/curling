@@ -1,0 +1,54 @@
+# EXP-040 / az_v14b PHASE 2: az_v13-recipe fine-tune of the DISTILLED 23.2M model on
+# the real corpus (az_v14_train/val). Warm-start = phase-1 best.pt (via --init).
+# fitting the corpus does not confer the lineage's proposal-distribution foundation).
+# Phase 1 distills the champion's policy (24-sample uniform-weight targets, temp 1.0)
+# and value (VFM path) on the corpus states; phase 2 (exp_040) then fine-tunes on the
+# real corpus with the az_v13 recipe.
+model:
+  hidden_dim: 384
+  n_layers: 6
+  n_heads: 6
+  dropout: 0.1
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.3               # from-scratch bootstrap: human BC alongside search distillation
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: true
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+  reward_action_conditioned: false
+replay:
+  unroll_steps: 5
+  mix_human: 0.15
+  mix_value: 0.20
+  mix_sim: 0.10
+  mix_mcts: 0.55
+  value_use_synthetic: true
+search:                        # unused (no collection) — present for config validity
+  noise_config: configs/noise/v2_fullsheet.json
+  noise_samples: 8
+train:
+  epochs: 20                   # budget ceiling; early stopping governs
+  batch_size: 256
+  samples_per_epoch: 120000
+  augment: true
+  gpus: [0, 1, 2, 3]
+  run_name: exp040_big_finetune
+  checkpoint_metric: val_policy_distill_mcts
+  early_stop_patience: 4
+  select_value_guard: 2.90     # drift guard, slightly looser than the 7.3M fine-tunes
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  include_preplaced: true
+  noisy_h2h: true

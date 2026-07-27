@@ -1,0 +1,17 @@
+# Ablation: policy + value heads only (no latent dynamics / consistency / reward /
+# decoder). Reduces to a multi-head graph-transformer trained on human BC + MCTS
+# distillation + value regression -- the closest analogue to the csas baselines.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: false
+  use_outcome: false
+  use_decoder: false
+  use_consistency: false
+loss:
+  policy_bc: 1.0
+  policy_distill: 1.0
+  value: 1.0
+  outcome: 0.0
+  consistency: 0.0
+  decoder: 0.0

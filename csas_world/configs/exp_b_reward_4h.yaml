@@ -1,0 +1,57 @@
+# EXP-009 (EXP-B): EXP-A + a separate 2-step-return reward head.
+# Identical to exp_a_tuned_4h.yaml EXCEPT it adds an auxiliary scalar reward head trained
+# on the 2-step return (rule margin if the end ends within 2 plies, else value model 2 plies
+# ahead). Tests whether disentangling the near-term signal from the terminal value head helps.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true      # EXP-B: enable the 2-step reward head
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5           # EXP-B: auxiliary reward-head Huber weight
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 96
+  diverse_candidates: 96
+  soft_topk: 24
+  noise_samples: 8
+  rollout_greedy_steps: 5
+  use_mcts_tree: true
+  mcts_sims: 96
+  mcts_k_widen: 2.0
+  mcts_alpha_widen: 0.5
+  mcts_uct_c: 0.6
+  rollout_temp: 0.6
+  collect_step_reward: true  # EXP-B: compute 2-step-return targets during collection
+train:
+  epochs: 8
+  batch_size: 256
+  samples_per_epoch: 90000
+  gpus: [0, 1, 2, 3]
+horizon:
+  start_horizon: 2
+  max_horizon: 5
+  rounds_per_stage: 1
+  roots_per_stage: 64
+  include_preplaced: false
+  converge_band: 0.04
+  converge_patience: 2
+  h2h_games_per_order: 40
