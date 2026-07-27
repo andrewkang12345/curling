@@ -1360,6 +1360,13 @@ under NEW rules — symmetric across branches, so pairwise adjudication stays fa
 Δ magnitudes carry that caveat. Root proposals come from the same exported champion policy
 for all three operators (cancels).
 
+**Standing directive (user, 2026-07-27):** if the pre-registered primary comes back
+promising, proceed DIRECTLY to Phase 1 — d3-target collection (sig-gated, CRN) +
+corrected-loop retrain + incumbent-relative gate — without further approval. All
+experiments from now on run the REAL dead-stone logic (boundary_removal ON, the stack
+default); selfplay and _eval_highN now print a RULES banner so every run log records
+which convention was active.
+
 
 ## Template for a new entry
 

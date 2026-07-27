@@ -325,6 +325,8 @@ def main():
     cfg: Config = load_config(args.config) if args.config else Config()
     device = torch.device(args.device)
     env_bridge.warm_jax()
+    print(f"[selfplay] RULES: boundary_removal={'ON (real takeout rules)' if env_bridge.BOUNDARY_REMOVAL else 'OFF (HISTORICAL convention!)'}",
+          flush=True)
     policy, amean_t, astd_t = load_policy(args.policy, device)
     amean_np = amean_t.detach().cpu().numpy().astype(np.float64)
     astd_np = astd_t.detach().cpu().numpy().astype(np.float64)

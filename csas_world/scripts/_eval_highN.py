@@ -37,8 +37,11 @@ if args.vs == "prior":
     label = "prior"
 else:
     opp_kind, opp_a, opp_b, label = "world", args.vs, None, "worldB"
+from world import env_bridge as _eb
 print(f"[eval] A={args.champion}\n[eval] B({label})={opp_a}\n[eval] N={args.N}/horizon, both orders, "
-      f"{'NOISY (robust select + realized noise)' if args.noisy else 'deterministic'}", flush=True)
+      f"{'NOISY (robust select + realized noise)' if args.noisy else 'deterministic'}\n"
+      f"[eval] RULES: boundary_removal={'ON (real takeout rules)' if _eb.BOUNDARY_REMOVAL else 'OFF (HISTORICAL convention!)'}",
+      flush=True)
 
 results, tot_w, tot_n = {}, 0.0, 0
 for h in horizons:
