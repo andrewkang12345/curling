@@ -49,6 +49,7 @@ turn: read the state, post a shot.
 | `GET /api/match/{id}` | same as JSON (add `?history=false` to slim it) |
 | `POST /api/match/{id}/solve` | dry-run a shot intent → solved action + predicted trajectory/board + champion eval. No state change. |
 | `POST /api/match/{id}/throw` | commit a shot (same body as solve). Response includes the realized (noisy) throw, the new board, and — if the champion is your opponent — its reply throw(s) in `replies`. |
+| `POST /api/match/{id}/undo` | roll the current end back to before your last throw (your throw + the champion's replies are discarded). Cannot cross a completed end. Every undo is recorded in the match data — competitive/eval matches should not use it. |
 | `GET /api/protocol` | this document |
 
 If you throw out of turn or after the match ends you get a 409 with an

@@ -17,8 +17,9 @@ const PHYS = { dt: 0.02, substeps: 2, maxSteps: 1500, vStop: 0.03, vCap: 6.0,
 const S = {
   matchId: null, match: null, mode: "draw", weight: "medium",
   selSlot: null, solved: null, targetMark: null, guide: null,
-  faded: [],   // pre-throw positions of stones displaced by the last throw
+  faded: [],   // pre-throw positions of stones displaced by the current throw
   evalA: 0, busy: false, animating: false, previewTimer: null,
+  solveSeq: 0, hintTimer: null,
 };
 
 const canvas = document.getElementById("sheet");
@@ -300,6 +301,8 @@ function applyMatch(m) {
   if (holdOk && ppOk) {
     $("sheetHint").textContent = "You have hammer: call your power play now, or let the champion throw first.";
   }
+  $("undoBtn").disabled = !(m.status === "in_progress" &&
+    (e.throws || []).some((r) => m.players[r.team] !== "champion"));
 
   syncThrowBtn();
   drawSheet();
@@ -349,11 +352,15 @@ function fmtAction(a) {
 }
 
 async function runSolve(body) {
-  if (!S.match || S.busy) return;
-  S.busy = true; S.solved = null; syncThrowBtn();
+  // Non-blocking: a newer solve supersedes an in-flight one (the server
+  // serialises sim work anyway), so the sheet never feels dead while solving.
+  if (!S.match) return;
+  const seq = ++S.solveSeq;
+  S.solved = null; syncThrowBtn();
   $("solveOut").innerHTML = "solving…";
   try {
     const out = await api(`/api/match/${S.matchId}/solve`, "POST", body);
+    if (seq !== S.solveSeq) return;   // superseded by a newer click
     S.solved = out;
     const info = out.solver || {};
     const err = info.achieved_error_m != null ? `± ${info.achieved_error_m} m off target` :
@@ -364,9 +371,16 @@ async function runSolve(body) {
       `${err}${out.preview?.illegal_takeout ? "  ⚠ ILLEGAL (early takeout — throw would be forfeited)" : ""}` +
       (v != null ? `\nchampion eval after this shot: ${v >= 0 ? "+" : ""}${v} (A perspective)` : "");
   } catch (e) {
+    if (seq !== S.solveSeq) return;
     $("solveOut").innerHTML = `solve failed: ${e.message}`;
   }
-  S.busy = false; syncThrowBtn(); drawSheet();
+  syncThrowBtn(); drawSheet();
+}
+
+function flashHint(msg) {
+  $("sheetHint").textContent = msg;
+  if (S.hintTimer) clearTimeout(S.hintTimer);
+  S.hintTimer = setTimeout(() => { $("sheetHint").textContent = modeHint(); }, 2200);
 }
 
 async function throwNow() {
@@ -457,8 +471,16 @@ function animateTrajectory(traj, finalBoard) {
 /* Input handling                                                      */
 /* ------------------------------------------------------------------ */
 canvas.addEventListener("click", (ev) => {
-  if (!S.match || S.match.status !== "in_progress" || S.busy || S.animating) return;
-  if (!humanTurn()) return;
+  if (!S.match) { flashHint("create a match first (button top right)"); return; }
+  if (S.match.status !== "in_progress") { flashHint("match is over — start a new match"); return; }
+  if (S.busy || S.animating) { flashHint("wait — a throw is in progress"); return; }
+  if (!humanTurn()) {
+    const t = S.match.turn;
+    flashHint(t && S.match.players[t.team] === "champion"
+      ? 'champion’s turn — press “Let champion throw”'
+      : "not your turn");
+    return;
+  }
   const [along, lat] = evToM(ev);
   const side = S.match.turn.team;
   if (S.mode === "draw") {
@@ -584,6 +606,18 @@ async function championResume() {
   S.busy = false; syncThrowBtn();
 }
 $("resumeBtn").addEventListener("click", championResume);
+
+$("undoBtn").addEventListener("click", async () => {
+  if (S.busy || S.animating) { flashHint("wait — a throw is in progress"); return; }
+  try {
+    const out = await api(`/api/match/${S.matchId}/undo`, "POST", {});
+    S.solved = null; S.targetMark = null; S.selSlot = null; S.faded = [];
+    $("solveOut").innerHTML = "";
+    log(`undo: rolled back to throw ${out.undo.back_to_throw} `
+        + `(${out.undo.throws_undone} throw${out.undo.throws_undone > 1 ? "s" : ""} discarded)`, "sys");
+    applyMatch(out.match);
+  } catch (e) { flashHint(`undo refused: ${e.message}`); }
+});
 
 /* ------------------------------------------------------------------ */
 /* New match                                                           */

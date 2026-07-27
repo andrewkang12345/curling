@@ -309,6 +309,9 @@ class Match:
             "realized": [round(float(v), 6) for v in realized],
             "illegal_takeout": illegal,
             "meta": meta or {},
+            # pre-throw snapshot so the throw can be undone
+            "pre_state": list(e["state"]), "pre_cond": list(e["cond"]),
+            "pre_throws_left": hh,
         }
         # champion value readout (team A perspective), if the champion is loaded
         try:
@@ -363,6 +366,38 @@ class Match:
             if done_regulation:
                 summary["extra_end"] = self.end_no + 1
         return summary
+
+    # ------------------------------------------------------------------ #
+    def undo_last_human(self) -> Dict[str, Any]:
+        """Roll the CURRENT end back to just before the last human/agent throw
+        (also discarding any champion replies after it). Undos never cross a
+        completed end (its score already counted) and are recorded in the
+        match log for integrity."""
+        if self.data["status"] != "in_progress":
+            raise ValueError("match is over")
+        e = self.cur_end
+        throws = e["throws"]
+        idx = None
+        for i in range(len(throws) - 1, -1, -1):
+            if self.data["players"].get(throws[i]["team"]) != "champion":
+                idx = i
+                break
+        if idx is None:
+            raise ValueError("nothing to undo in this end (undo cannot cross a completed end)")
+        rec = throws[idx]
+        if "pre_state" not in rec:
+            raise ValueError("undo unavailable for throws made before the undo feature existed")
+        undone = len(throws) - idx
+        e["throws"] = throws[:idx]
+        e["state"] = list(rec["pre_state"])
+        e["cond"] = list(rec["pre_cond"])
+        e["throws_left"] = int(rec["pre_throws_left"])
+        self.data.setdefault("undos", []).append({
+            "end": self.end_no, "from_throw": int(rec["n"]), "throws_undone": undone,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        self.save()
+        return {"throws_undone": undone, "back_to_throw": int(rec["n"])}
 
     # ------------------------------------------------------------------ #
     def champion_move(self) -> Dict[str, Any]:

@@ -187,7 +187,7 @@ def power_play(mid: str, body: PowerPlay):
         m.set_power_play(body.side, body.wing)
     except ValueError as e:
         raise HTTPException(409, str(e))
-    return {"match": m.to_dict(include_history=False), "text": m.text_state()}
+    return {"match": m.to_dict(), "text": m.text_state()}
 
 
 @app.post("/api/match/{mid}/solve")
@@ -226,7 +226,21 @@ def throw(mid: str, body: ShotRequest):
     replies = m.auto_play() if body.auto_reply else []
     return {"intended": [round(float(v), 6) for v in action], "solver": info,
             "result": result, "replies": replies,
-            "match": m.to_dict(include_history=False), "text": m.text_state()}
+            "match": m.to_dict(), "text": m.text_state()}
+
+
+@app.post("/api/match/{mid}/undo")
+def undo(mid: str):
+    """Roll the current end back to before the last human/agent throw (their
+    throw and any champion replies after it are discarded). Undos are recorded
+    in the match data; they cannot cross a completed end."""
+    m = _match(mid)
+    try:
+        info = m.undo_last_human()
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"undo": info, "match": m.to_dict(),
+            "text": m.text_state()}
 
 
 @app.post("/api/match/{mid}/champion_move")
@@ -241,7 +255,7 @@ def champion_move(mid: str):
     if not replies:
         raise HTTPException(409, "the champion is not on turn")
     return {"result": replies[0], "replies": replies[1:],
-            "match": m.to_dict(include_history=False), "text": m.text_state()}
+            "match": m.to_dict(), "text": m.text_state()}
 
 
 # --------------------------------------------------------------------------- #
