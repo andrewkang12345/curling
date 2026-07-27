@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Curling Arena</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Curling Arena</h1>
+    <div class="sub">mixed doubles &middot; authoritative simulator &middot; champion: az_v14d</div>
+    <div class="header-actions">
+      <button id="newMatchBtn" class="primary">New match</button>
+      <a href="/api/protocol" target="_blank" class="linkbtn">Agent protocol</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="sheet-panel">
+      <canvas id="sheet"></canvas>
+      <div id="sheetHint" class="hint">Create a match to start.</div>
+    </section>
+
+    <section class="side-panel">
+      <div class="card" id="scoreCard">
+        <div class="score-row">
+          <div class="team teamA"><span class="dot A"></span><span id="nameA">Team A</span></div>
+          <div class="totals"><span id="totalA">0</span> : <span id="totalB">0</span></div>
+          <div class="team teamB"><span id="nameB">Team B</span><span class="dot B"></span></div>
+        </div>
+        <div id="endsGrid" class="ends-grid"></div>
+        <div id="turnLine" class="turn-line">&mdash;</div>
+        <div class="eval-wrap" title="Champion value estimate (expected end score, Team A perspective)">
+          <div class="eval-bar"><div id="evalFill"></div><div class="eval-mid"></div></div>
+          <div id="evalNum" class="eval-num">0.0</div>
+        </div>
+      </div>
+
+      <div class="card" id="controlCard">
+        <div class="tabs" id="modeTabs">
+          <button data-mode="draw" class="tab active">Draw to</button>
+          <button data-mode="contact" class="tab">Hit at point</button>
+          <button data-mode="after_contact" class="tab">Move stone</button>
+          <button data-mode="params" class="tab">Sliders</button>
+        </div>
+
+        <div id="modeHelp" class="mode-help"></div>
+
+        <div id="paramsControls" class="controls hidden">
+          <label>speed <span id="speedVal"></span>
+            <input id="speed" type="range" min="2.20" max="3.01" step="0.005" value="2.55" /></label>
+          <label>angle <span id="angleVal"></span>
+            <input id="angle" type="range" min="-0.1038" max="0.1038" step="0.0004" value="0" /></label>
+          <label>spin <span id="spinVal"></span>
+            <input id="spin" type="range" min="-7" max="7" step="0.1" value="3.5" /></label>
+          <label>release offset <span id="y0Val"></span>
+            <input id="y0" type="range" min="-0.23" max="0.23" step="0.005" value="0" /></label>
+        </div>
+
+        <div id="contactControls" class="controls hidden">
+          <div class="weight-row">weight:
+            <button data-w="soft" class="wbtn">soft</button>
+            <button data-w="medium" class="wbtn active">medium</button>
+            <button data-w="heavy" class="wbtn">heavy</button>
+          </div>
+        </div>
+
+        <div id="afterControls" class="controls hidden">
+          <div id="afterStatus" class="small">Click one of the stones on the sheet.</div>
+          <button id="removeBtn" class="ghost hidden">Take selected stone OUT of play</button>
+        </div>
+
+        <div id="solveOut" class="solve-out"></div>
+
+        <div class="btn-row">
+          <button id="throwBtn" class="primary" disabled>Throw</button>
+          <button id="resumeBtn" class="primary hidden">Let champion throw &#9654;</button>
+          <button id="ppBtn" class="ghost hidden">Power play</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Log</div>
+        <div id="log" class="log"></div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="newMatchDlg">
+    <form method="dialog">
+      <h2>New match</h2>
+      <label>You play as
+        <select id="nmSide"><option value="A">Team A (red)</option><option value="B">Team B (yellow)</option></select>
+      </label>
+      <label>Opponent
+        <select id="nmOpp"><option value="champion">Champion (az_v14d)</option><option value="human">Human / agent (hot seat)</option></select>
+      </label>
+      <label>Ends <input id="nmEnds" type="number" min="1" max="20" value="8" /></label>
+      <label>First hammer
+        <select id="nmHammer"><option value="random">random</option><option value="you">you</option><option value="opponent">opponent</option></select>
+      </label>
+      <label class="chk"><input id="nmNoise" type="checkbox" checked /> execution noise (eval protocol)</label>
+      <label>Your name <input id="nmName" type="text" placeholder="human" /></label>
+      <menu>
+        <button value="cancel" class="ghost">Cancel</button>
+        <button id="nmCreate" value="default" class="primary">Start</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

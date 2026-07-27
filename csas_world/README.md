@@ -166,3 +166,28 @@ at comparable NLL.
   O(batch·stones²) — larger batches OOM). `amp` is off (csas `_scale_tril`'s `exp`
   is fp32-only under autocast).
 ```
+
+## Arena — the standard head-to-head interface
+
+`arena/` is the standard way to play against csas_world models going forward:
+humans through a web UI, LLM agents / scripts through a JSON + plain-text API,
+all on the **authoritative stack** (default `CurlingParams()` physics via
+`env_bridge`, rules scoring, early-takeout legality, v2_fullsheet execution
+noise) with the champion at its deployed strength (48-candidate robust
+selection, 8 noise realizations, value-head ranked).
+
+```bash
+bash arena/run.sh 8020        # web UI at :8020, agent docs at /api/protocol
+```
+
+- Full mixed-doubles matches: pre-placed ends, hammer rules (scoring team and
+  blanked ends both pass hammer), power plays, extra ends.
+- Four shot-input modalities (`arena/AGENTS.md`): raw params, draw-to-rest,
+  contact-point + weight, and move-hit-stone-to-target / takeout — the target
+  modalities are solved by a path-bank + CEM inverse solver against the real
+  board, and every solve reports its achieved error plus the champion's value
+  estimate of the predicted outcome.
+- Matches persist in `arena/matches/*.json` with intended vs realized actions
+  and per-throw champion evals — completed matches double as analysis logs.
+- Env knobs: `ARENA_CKPT`, `ARENA_DEVICE`, `ARENA_CHAMPION_CANDIDATES`,
+  `ARENA_CHAMPION_NOISE_SAMPLES`, `ARENA_NOISE_CFG`.

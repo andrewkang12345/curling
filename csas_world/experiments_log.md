@@ -1235,6 +1235,30 @@ self-continuations rather than vs the eval opponent. Cost-ordered follow-ups lis
 - **Champion unchanged: `az_v14d/best.pt`.**
 
 ---
+---
+
+## INFRA-051 — Curling Arena (standard head-to-head interface) — 2026-07-27
+
+Built `arena/`: FastAPI app + web UI + agent JSON/text protocol for playing full
+mixed-doubles matches against the champion on the authoritative stack (env_bridge
+default-params physics, rules scoring, early-takeout legality, v2_fullsheet noise;
+champion = WorldPlayer az_v14d, 48 candidates × 8 noise realizations — stronger
+noise-averaging than the ×2 eval default, logged per match). Survey of prior
+webapps: took mixed_doubles_game's interaction shape (canvas + live guide +
+trajectory playback), threw away its stale stack (contact_mild physics,
+SetTransformer value), rebuilt clean in csas_world. Input modalities: raw params,
+draw-to-rest, contact-point+weight, move-hit-stone-to / takeout (path-bank NN init
++ real-board CEM; achieved error always reported). Draw solves ≈1–2 cm noiseless;
+contact/tap honest at 0.2–0.5 m when guards physically constrain the shot.
+**Semantics discovery (documented in AGENTS.md):** in the training convention,
+stones driven through the back are NOT removed — `in_play` masks stones only off
+the raw grid — so takeouts park victims behind the house ("spent" zone) and the
+early-takeout forfeit fires only on literal off-grid removals. The arena keeps
+these semantics exactly (match outcomes are byte-identical to the eval harness
+transition). Matches persist as JSON logs (intended vs realized actions, per-throw
+champion evals). Power-play window: champion waits at an end's first throw while a
+human/agent hammer side may still call its power play. `bash arena/run.sh 8020`.
+
 
 ## Template for a new entry
 

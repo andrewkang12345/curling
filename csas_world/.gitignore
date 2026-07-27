@@ -13,3 +13,6 @@ Trash/
 eval_out/
 *.log
 nohup.out
+arena/matches/
+arena/cache/
+arena/server.pid
