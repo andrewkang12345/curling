@@ -17,6 +17,7 @@ const PHYS = { dt: 0.02, substeps: 2, maxSteps: 1500, vStop: 0.03, vCap: 6.0,
 const S = {
   matchId: null, match: null, mode: "draw", weight: "medium",
   selSlot: null, solved: null, targetMark: null, guide: null,
+  faded: [],   // pre-throw positions of stones displaced by the last throw
   evalA: 0, busy: false, animating: false, previewTimer: null,
 };
 
@@ -85,7 +86,13 @@ function stoneColor(team) { return team === "A" ? "#d1584a" : "#e5b93c"; }
 function drawStoneAt(along, lat, team, opts = {}) {
   const r = GEOM.stoneR * ppm();
   ctx.beginPath(); ctx.arc(px(lat), py(along), r, 0, Math.PI * 2);
-  if (opts.ghost) {
+  if (opts.faded) {
+    ctx.save(); ctx.globalAlpha = 0.22;
+    ctx.fillStyle = stoneColor(team); ctx.fill();
+    ctx.globalAlpha = 0.35; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(20,28,36,0.8)"; ctx.stroke();
+    ctx.restore();
+  } else if (opts.ghost) {
     ctx.strokeStyle = stoneColor(team); ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
     ctx.stroke(); ctx.setLineDash([]);
   } else {
@@ -104,6 +111,7 @@ function drawStoneAt(along, lat, team, opts = {}) {
 
 function drawBoard(boardOverride) {
   const board = boardOverride || (S.match && S.match.board) || [];
+  for (const f of S.faded) drawStoneAt(f.along, f.lateral, f.team, { faded: true });
   for (const s of board) {
     drawStoneAt(s.along, s.lateral, s.team,
                 { label: (s.slot % 6) + 1, selected: s.slot === S.selSlot });
@@ -370,10 +378,13 @@ async function throwNow() {
     const out = await api(`/api/match/${S.matchId}/throw`, "POST",
                           { side, type: "params", action: S.solved.intended });
     S.solved = null; S.targetMark = null; S.selSlot = null;
-    await animateResult(out.result, side);
+    let prev = S.match.board;
+    await animateResult(out.result, side, prev);
+    prev = out.result.board;
     for (const rep of out.replies || []) {
-      log(`champion throws (${fmtAction(rep.throw.realized)})`, "B");
-      await animateResult(rep, rep.throw.team);
+      log(`champion throws (${fmtAction(rep.throw.realized)})`, rep.throw.team);
+      await animateResult(rep, rep.throw.team, prev);
+      prev = rep.board;
     }
     applyMatch(out.match);
     $("solveOut").innerHTML = "";
@@ -383,16 +394,29 @@ async function throwNow() {
   S.busy = false; syncThrowBtn();
 }
 
-async function animateResult(result, side) {
+function computeFaded(prevBoard, newBoard) {
+  const out = [];
+  for (const s of prevBoard || []) {
+    const n = (newBoard || []).find((q) => q.slot === s.slot);
+    if (!n || Math.hypot(n.along - s.along, n.lateral - s.lateral) > 0.02) {
+      out.push({ team: s.team, along: s.along, lateral: s.lateral });
+    }
+  }
+  return out;
+}
+
+async function animateResult(result, side, prevBoard) {
   const rec = result.throw;
   if (rec.illegal_takeout) {
     log(`Team ${side} throw ${rec.n}: ILLEGAL early takeout — forfeited, board restored`, side);
   } else {
     log(`Team ${side} throw ${rec.n}/10`, side);
   }
+  S.faded = computeFaded(prevBoard, result.board);
   if (result.trajectory) await animateTrajectory(result.trajectory, result.board);
   if (rec.value_A != null) setEval(rec.value_A);
   if (result.end_result) {
+    S.faded = [];   // new end, fresh pre-placed board
     const er = result.end_result;
     const sc = er.score.team ? `Team ${er.score.team} scores ${er.score.points}` : "blank end";
     log(`End ${er.end}: ${sc} — totals A ${er.totals.A} : ${er.totals.B} B`, "sys");
@@ -543,9 +567,11 @@ async function championResume() {
   $("sheetHint").textContent = "champion thinking…";
   try {
     const out = await api(`/api/match/${S.matchId}/champion_move`, "POST", {});
+    let prev = S.match.board;
     for (const rep of [out.result, ...(out.replies || [])]) {
       log(`champion throws (${fmtAction(rep.throw.realized)})`, rep.throw.team);
-      await animateResult(rep, rep.throw.team);
+      await animateResult(rep, rep.throw.team, prev);
+      prev = rep.board;
     }
     applyMatch(out.match);
   } catch (e) { log(`champion move failed: ${e.message}`, "sys"); }
@@ -571,7 +597,7 @@ $("newMatchDlg").addEventListener("close", async () => {
     const out = await api("/api/match", "POST", {
       players, labels, ends: +$("nmEnds").value, noise: $("nmNoise").checked, first_hammer,
     });
-    S.solved = null; S.targetMark = null; S.selSlot = null;
+    S.solved = null; S.targetMark = null; S.selSlot = null; S.faded = [];
     applyMatch(out.match);
     log(`new match ${out.match.id} — you are Team ${side}`, "sys");
     if (out.champion_opening) {

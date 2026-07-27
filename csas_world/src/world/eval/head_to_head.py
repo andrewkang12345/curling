@@ -147,14 +147,20 @@ class WorldPlayer(Player):
         from ..actions import clip_raw
         return clip_raw(a)
 
-    def _value_fn(self, states, cond):
+    def _value_fn(self, states, cond, batch_size: int = 128):
+        # chunked: the GraphTF curl-arc edge features allocate O(batch·stones²·arcs);
+        # noise-expanded candidate sets (e.g. 48x8=384 posts) spike several GB unchunked
         torch = self._torch
+        states = np.asarray(states, dtype=np.float32)
+        c = np.broadcast_to(cond, (len(states), 3)).astype(np.float32)
+        out = np.empty(len(states), dtype=np.float32)
         with torch.no_grad():
-            c = np.broadcast_to(cond, (len(states), 3)).astype(np.float32)
-            xt = torch.as_tensor(states, dtype=torch.float32, device=self.device)
-            ct = torch.as_tensor(c, dtype=torch.float32, device=self.device)
-            mean = self.value_model.value_head.value(self.value_model.encode(xt, ct))
-        return mean.cpu().numpy()
+            for i in range(0, len(states), batch_size):
+                xt = torch.as_tensor(states[i:i + batch_size], dtype=torch.float32, device=self.device)
+                ct = torch.as_tensor(c[i:i + batch_size], dtype=torch.float32, device=self.device)
+                mean = self.value_model.value_head.value(self.value_model.encode(xt, ct))
+                out[i:i + batch_size] = mean.squeeze(-1).float().cpu().numpy()
+        return out
 
     def select_intended(self, x, c, horizon, shots_in_end, perspective_block):
         cands, q = _decision_values(self._sample_fn, self._value_fn, x, c, horizon,

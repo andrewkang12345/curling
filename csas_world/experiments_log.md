@@ -1258,6 +1258,49 @@ these semantics exactly (match outcomes are byte-identical to the eval harness
 transition). Matches persist as JSON logs (intended vs realized actions, per-throw
 champion evals). Power-play window: champion waits at an end's first throw while a
 human/agent hammer side may still call its power play. `bash arena/run.sh 8020`.
+---
+
+## EXP-052 / az_v19 — NEW-RULES RETRAIN (boundary removal) — IN FLIGHT 2026-07-27
+
+**Question.** The training convention never removes stones driven behind the house (the
+raw-grid `in_play` mask kills only off-grid stones), so takeout victims park "spent" behind
+the house and the early-takeout forfeit almost never fires (INFRA-051 discovery). What
+happens if we flip to REAL-curling removal — stones die past the back line (center >
+1.974 m) or on the side boards (|lateral| > 2.23 m) — making the no-takeout rule bind as
+intended, and retrain the champion in that world?
+
+**Mechanism.** `WORLD_BOUNDARY_REMOVAL=1` in `env_bridge` (post-processing on every
+simulator transition; all csas_world sim consumers route through env_bridge — verified).
+Unit-verified: through-the-back stones die; opponent removal at h10 → illegal + board
+restored; same removal at h7 → legal; own-stone removal legal. Hogged/short stones
+unchanged (out of scope).
+
+**Design** (`scripts/_exp052_newrules_loop.sh`, config `exp_052_L8_newrules` = exp_048
+corrected-loop recipe):
+1. Collect ~600 games champion (az_v14d exported policy) self-play under NEW rules,
+   sig-gated screen_tree (exp_037 operator), 6 workers × 16 games/round →
+   `artifacts/replay/mcts/az_v19_newrules/`.
+2. Fine-tune az_v14d (L8) on the corpus (shard 5 = val).
+3. Eval h2h vs unadapted az_v14d: 3 draws UNDER NEW RULES (primary; dScore-primary,
+   N=400×10 horizons×2 orders per draw) + 1 draw under OLD rules (regression check).
+
+**Pre-registered outcomes.**
+- Adapted > champion under new rules (ds > 2·SE): rules change is strategically material
+  and the loop exploits it (expected mainly via legal-takeout discipline at h≥8 and
+  changed hit-and-roll value: shooters that roll through the back now die).
+- Null: az_v14d's play already transfers (plausible: removal mostly deletes stones that
+  were strategically irrelevant when parked; the binding legality rule is rare in
+  practice IF the champion rarely peels early).
+- Adapted < champion under old rules (secondary): adaptation cost, quantifies rules gap.
+
+**Known caveats (accepted, documented):** mix_sim 0.10 consistency buffers are old-rules
+transitions (representation-level only); human value anchor (0.10) is real-curling data —
+consistent with the NEW rules, arguably a better anchor here than in every prior run.
+Corpus scale ~6k records is az_v9-iteration scale, below the EXP-050 3× corpus — a null at
+this scale is weak evidence (same asymmetry as EXP-050); a positive is a positive.
+
+**Status.** Collection launched 2026-07-27. Raw eval aggregates are auto-appended by the
+chain script on completion; verdict + draw-level ±SE finalised by hand below.
 
 
 ## Template for a new entry

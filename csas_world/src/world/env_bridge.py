@@ -12,6 +12,7 @@ All actions are physical ``[speed, angle, spin, y0]``.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Optional, Tuple
 
@@ -20,6 +21,36 @@ import numpy as np
 NUM_STONES = 12
 STATE_DIM = NUM_STONES * 2  # 24
 COND_DIM = 3
+
+# --------------------------------------------------------------------------- #
+# Optional real-curling boundary removal (EXP-052, WORLD_BOUNDARY_REMOVAL=1)
+#
+# Default (off) keeps the historical training convention: the raw data grid's
+# in-play mask almost never removes stones, so takeout victims park "spent"
+# behind the house. With the flag ON, every simulator transition additionally
+# removes stones whose final CENTER is fully past the back line, or that touch
+# a side board — which also makes the early-takeout legality rule bind the way
+# real mixed-doubles rules intend. Short (hogged) stones are unchanged.
+# --------------------------------------------------------------------------- #
+BOUNDARY_REMOVAL = str(os.environ.get("WORLD_BOUNDARY_REMOVAL", "")).lower() in ("1", "true", "yes")
+BACK_LINE_REMOVE_M = 1.829 + 0.145   # back line tangent to the house + stone radius
+SIDE_REMOVE_M = 2.375 - 0.145        # sheet half-width minus stone radius
+
+
+def boundary_removal(posts_norm: np.ndarray) -> np.ndarray:
+    """Kill stones past the back line / on the side boards (no-op unless the
+    WORLD_BOUNDARY_REMOVAL env flag is set). Accepts (..., 24) normalised."""
+    if not BOUNDARY_REMOVAL:
+        return posts_norm
+    posts = np.asarray(posts_norm, dtype=np.float32).copy()
+    flat = posts.reshape(-1, NUM_STONES, 2) * 4095.0
+    x, y = flat[..., 0], flat[..., 1]
+    live = ((x > 0) | (y > 0)) & (x < 4095.0) & (y < 4095.0)
+    along = (800.0 - y) * 0.003048
+    lateral = (x - 750.0) * 0.003048
+    kill = live & ((along > BACK_LINE_REMOVE_M) | (np.abs(lateral) > SIDE_REMOVE_M))
+    flat[kill] = 4095.0
+    return (flat / 4095.0).reshape(posts.shape).astype(np.float32)
 
 
 # --------------------------------------------------------------------------- #
@@ -41,11 +72,11 @@ def simulate(state_norm: np.ndarray, cond: np.ndarray, actions: np.ndarray) -> n
     from csas.search import _simulate_candidates
 
     actions = np.atleast_2d(np.asarray(actions, dtype=np.float32))
-    return np.asarray(_simulate_candidates(
+    return boundary_removal(np.asarray(_simulate_candidates(
         np.asarray(state_norm, dtype=np.float32),
         np.asarray(cond, dtype=np.float32),
         actions,
-    ), dtype=np.float32)
+    ), dtype=np.float32))
 
 
 def simulate_one(state_norm: np.ndarray, cond: np.ndarray, action: np.ndarray) -> np.ndarray:
@@ -77,7 +108,7 @@ def simulate_batched(states_norm: np.ndarray, conds: np.ndarray, actions: np.nda
         idx = np.where(live_counts == n_prev)[0]
         res = _simulate_candidates_batched(states[idx], conds[idx], actions[idx][:, None, :])
         out[idx] = np.asarray(res, dtype=np.float32)[:, 0, :]
-    return out
+    return boundary_removal(out)
 
 
 def score_end(state_norm: np.ndarray, perspective_block: int) -> float:
