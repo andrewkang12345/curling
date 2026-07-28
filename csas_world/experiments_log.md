@@ -1402,6 +1402,38 @@ user-callable option AFTER the rules-change retrain resolves, ideally with budge
 and CRN-tightened screens. The latent-tree (dynamics-head) route formally inherits the
 depth question. **Decision executed: EXP-052 collection resumed.** CRN itself is a keeper
 regardless — it is free variance reduction for every future screen/gate.
+---
+
+## EXP-054 / depth x compute dose-response — QUEUED behind EXP-052 (pre-registered 2026-07-28)
+
+**Question (user).** Does the depth-2 vs depth-3 comparison change at LARGER budgets for
+both? EXP-053's single-point comparison had a 1.6x wall-clock mismatch (against d3) and a
+99% noise-driven disagreement rate; its pooled verdict was a near-miss (16/23=69.6%,
+p=0.0466 vs the corrected 0.03 bar).
+
+**Design** (`scripts/exp054_depth_dose.py`; fresh val roots seed 54, h in {6,8,10}, 32/h =
+96 plies; new rules; same exported-champion proposals everywhere). Four operators per ply:
+d2_lo (exp_037: ke 8 / 48 sims), d3_lo (EXP-053 beam), d2_hi (ke 32 / 192 sims), d3_hi
+(ke 12, beams 8/4, opp 20, mine 16 — a-priori wall-clock-matched to d2_hi at ~320-360s/ply;
+measured seconds recorded per op for honest accounting). Noise-averaging paradigm everywhere
+(k_ego noisy executions per intended throw at every screen, CRN-paired in d3; fresh-noise
+visits in the d2 tree; T=16 paired noisy playouts in adjudication). Interior beam nodes
+condition on the deterministic parent post (documented approximation).
+
+**Adjudication.** Paired guided playouts T=16 (deployed champion both sides) on the two
+DEPTH contrasts: d3_hi-vs-d2_hi and d3_lo-vs-d2_lo; paired MC k=64 on those plus the
+within-depth dose contrasts (d2_hi-vs-d2_lo, d3_hi-vs-d3_lo).
+
+**Pre-registered readouts (single look).**
+1. PRIMARY: playout-resolved d3_hi vs d2_hi wins, binom p < 0.05 -> depth certified at high
+   budget; Phase-1 depth retrain fires per the standing directive (post-EXP-052 champion).
+2. Dose-response: hi beats lo within each depth (MC) — sanity that budget buys quality.
+3. Interaction: depth gap (d3-d2) larger at hi than lo -> depth is the scaling lever;
+   gap shrinking at hi -> budget-not-depth (spend compute on wider robust screens).
+4. d3_lo-vs-d2_lo = EXP-053 replication on fresh roots (consistency check).
+
+**Status.** QUEUED: auto-launches when the EXP-052 chain completes (watcher on
+EXP052_DONE); both studies are CPU-sim-bound so they are sequenced, not interleaved.
 
 
 ## Template for a new entry
