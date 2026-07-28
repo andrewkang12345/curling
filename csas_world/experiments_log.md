@@ -1367,6 +1367,25 @@ experiments from now on run the REAL dead-stone logic (boundary_removal ON, the 
 default); selfplay and _eval_highN now print a RULES banner so every run log records
 which convention was active.
 
+**RESULTS (first look, 160/160 plies, 2026-07-28).** Wall-clock/ply: d2 61s, d2p 194s,
+d3 121s — the "compute-matched" control actually got ~1.6x d3's budget (tree overhead is
+serial), making the comparison conservative AGAINST d3. Operators disagree on ~99% of plies
+at dn>2.5 (single-argmax choice under near-ties is noise-dominated — consistent with
+EXP-037's ~8.5% true-significance rate). PRIMARY (playout-resolved d3 vs d2p): **16/25 =
+64%, binom p=0.115** — direction positive but NOT at the p<0.05 bar; d3-vs-d2 agrees
+(10/17, mean Δ +0.085/end). Adjudicator split matches the pre-registered bias prediction:
+behavior-policy MC scores d3 at 43% while realistic strong-play playouts score it 64% —
+d3 appears to buy adversarial robustness that behavior-rollout estimands can't see.
+Resolution rate was only 25/158 at T=8 → the study is underpowered, not negative.
+
+**EXTENSION (EXP-053b, pre-registered second look, launched 2026-07-28).** Searches are
+stored; re-adjudicate every stored d3-vs-d2p disagreement with 8 additional paired guided
+playouts (pooled T=16, exact two-group pooling, fresh disjoint seeds). Sequential-look
+correction: certify depth iff pooled playout-resolved d3 wins at **binom p < 0.03** (and
+d3-vs-d2 direction unchanged). If certified -> Phase 1 fires per the standing directive;
+if not -> depth-via-sim is declared not-a-lever at this branching/noise level, the
+latent-tree route inherits the depth question, and EXP-052 collection resumes.
+
 
 ## Template for a new entry
 
