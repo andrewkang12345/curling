@@ -1386,6 +1386,23 @@ d3-vs-d2 direction unchanged). If certified -> Phase 1 fires per the standing di
 if not -> depth-via-sim is declared not-a-lever at this branching/noise level, the
 latent-tree route inherits the depth question, and EXP-052 collection resumes.
 
+**FINAL (EXP-053b pooled, T=16, 158/158 pairs, 2026-07-28): NOT certified.** Resolved
+pairs 23 (down from 25 — some T=8 "resolved" pairs were regression-to-the-mean, exactly
+what the extension guards against); d3 wins **16/23 = 69.6%, binom p = 0.0466** vs the
+pre-registered corrected bar p<0.03. Mean adjudicated Δ **+0.056/end ± 0.056**. Per-horizon
+resolved wins: h04 4/6, h06 1/3, h08 8/11, h10 3/3. Direction agreed everywhere with the
+first look and with d3-vs-d2.
+
+**Interpretation.** The pre-registered rule says depth-via-sim is NOT certified as a lever
+at this branching/noise level. Honest caveats pointing the other way: p=0.0466 would pass a
+naive one-look 0.05 bar; the point estimate is a ~70% decision-win rate; the control had
+1.6x d3's wall-clock; and the effect concentrates late-end (h08+h10: 11/14). Verdict stands
+(no third look — that would be p-hacking), but a Phase-1 depth retrain remains a live,
+user-callable option AFTER the rules-change retrain resolves, ideally with budget-parity d3
+and CRN-tightened screens. The latent-tree (dynamics-head) route formally inherits the
+depth question. **Decision executed: EXP-052 collection resumed.** CRN itself is a keeper
+regardless — it is free variance reduction for every future screen/gate.
+
 
 ## Template for a new entry
 
