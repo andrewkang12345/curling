@@ -126,8 +126,10 @@ env_bridge.warm_jax()
 cfg_full: Config = load_config(args.config)
 cfg_lo = cfg_full.search                       # d2_lo knobs (exp_037)
 cfg_hi = copy.deepcopy(cfg_lo)
-cfg_hi.noise_samples = 32
-cfg_hi.mcts_sims = 192
+# calibrated 2026-07-28 from first-ply wall-clocks (d2_hi 191s vs d3_hi 363s at the
+# original ke 32 / 192 sims): raised to restore ~parity with d3_hi (~360s/ply at h6)
+cfg_hi.noise_samples = 56
+cfg_hi.mcts_sims = 384
 
 policy, amean_t, astd_t = load_policy(args.policy, device)
 amean_np = amean_t.detach().cpu().numpy().astype(np.float64)

@@ -1413,9 +1413,11 @@ p=0.0466 vs the corrected 0.03 bar).
 
 **Design** (`scripts/exp054_depth_dose.py`; fresh val roots seed 54, h in {6,8,10}, 32/h =
 96 plies; new rules; same exported-champion proposals everywhere). Four operators per ply:
-d2_lo (exp_037: ke 8 / 48 sims), d3_lo (EXP-053 beam), d2_hi (ke 32 / 192 sims), d3_hi
-(ke 12, beams 8/4, opp 20, mine 16 — a-priori wall-clock-matched to d2_hi at ~320-360s/ply;
-measured seconds recorded per op for honest accounting). Noise-averaging paradigm everywhere
+d2_lo (exp_037: ke 8 / 48 sims), d3_lo (EXP-053 beam), d2_hi (ke 56 / 384 sims — CALIBRATED
+up from ke 32/192 after the first 3 plies measured d2_hi at 191s vs d3_hi 363s, before any
+adjudication outcomes were inspected; those 3 plies were discarded and the study restarted),
+d3_hi (ke 12, beams 8/4, opp 20, mine 16; ~360s/ply measured at h6). Measured seconds
+recorded per op for honest accounting. Noise-averaging paradigm everywhere
 (k_ego noisy executions per intended throw at every screen, CRN-paired in d3; fresh-noise
 visits in the d2 tree; T=16 paired noisy playouts in adjudication). Interior beam nodes
 condition on the deterministic parent post (documented approximation).
@@ -1432,8 +1434,28 @@ within-depth dose contrasts (d2_hi-vs-d2_lo, d3_hi-vs-d3_lo).
    gap shrinking at hi -> budget-not-depth (spend compute on wider robust screens).
 4. d3_lo-vs-d2_lo = EXP-053 replication on fresh roots (consistency check).
 
-**Status.** QUEUED: auto-launches when the EXP-052 chain completes (watcher on
-EXP052_DONE); both studies are CPU-sim-bound so they are sequenced, not interleaved.
+**Status.** RUNNING since 2026-07-28 ~10:00 UTC (user directive: EXP-052 paused again to
+prioritize the depth comparison; its collection had banked 4 complete rounds = 384/600
+games before the pause, resumable).
+
+**RESULTS (96/96 plies, 2026-07-29): DEPTH IS NOT A LEVER — decisive null + failed replication.**
+Wall-clock/ply: d2_lo 69s, d3_lo 140s, d2_hi 483s, d3_hi 378s (the hi control ended up 1.28x
+d3_hi at h8/h10 — biased toward the control, i.e. conservative FOR the null).
+- PRIMARY (playout-resolved d3_hi vs d2_hi, T=16): **3/6, p=0.66** — nothing. Resolution
+  collapsed at high budget (6/95): when the well-fed operators disagree, the alternatives are
+  near-equivalued.
+- **EXP-053 REPLICATION FAILED**: d3_lo vs d2_lo on fresh roots = 5/12 resolved wins, mean
+  Δ = −0.139/end (was 16/23 = 69.6%, +0.056 on the original roots). The EXP-053 near-signal
+  (p=0.0466) was noise; the pre-registered corrected bar (p<0.03) correctly refused it.
+- Dose-response sanity: hi > lo within each depth per MC (11/17 and 13/21, both ns, mean Δ
+  +0.104 / +0.026) — budget buys a little decision quality; DEPTH does not (no interaction).
+
+**VERDICT & decision executed.** Simulator-tree depth-3 is declared not-a-lever at this
+branching/noise level, now on a proper dose-response with honest budget accounting. Phase-1
+depth retrain does NOT fire. The latent-tree (dynamics-head) route formally inherits the
+depth question. CRN remains adopted for all future screens/gates. **EXP-052 resumed**
+(collection was at 384/600 games).
+
 
 
 ## Template for a new entry

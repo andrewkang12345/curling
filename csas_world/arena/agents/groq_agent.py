@@ -29,6 +29,7 @@ ap.add_argument("--side", default="A")
 ap.add_argument("--temperature", type=float, default=0.5)
 ap.add_argument("--max-previews", type=int, default=1, help="solve previews the LLM may request per turn")
 ap.add_argument("--log-dir", default=str(Path(__file__).parent / "logs"))
+ap.add_argument("--resume-mid", default=None, help="continue an in_progress match id (first match slot)")
 args = ap.parse_args()
 
 KEY = os.environ.get("GROQ_API_KEY")
@@ -81,16 +82,18 @@ def api(path, method="GET", body=None, timeout=900):
 
 
 _last_llm_call = [0.0]
-MIN_INTERVAL = 4.0   # pace requests to stay under free-tier RPM limits
+MIN_INTERVAL = 8.0   # pace requests to stay under free-tier RPM/TPM limits
 
 
 def llm(messages):
+    # max_tokens stays small: Groq's TPM limiter counts input + max_tokens as the
+    # request estimate (gpt-oss-120b free tier = 8k TPM), and our JSON reply is tiny
     body = {"model": args.model, "messages": messages, "temperature": args.temperature,
-            "max_tokens": 4096, "response_format": {"type": "json_object"}}
+            "max_tokens": 1280, "response_format": {"type": "json_object"}}
     if "gpt-oss" in args.model:
         body["reasoning_effort"] = "low"   # curling turns don't need long chains; saves TPM
     data = json.dumps(body).encode()
-    for attempt in range(8):
+    for attempt in range(12):
         wait = MIN_INTERVAL - (time.time() - _last_llm_call[0])
         if wait > 0:
             time.sleep(wait)
@@ -107,22 +110,28 @@ def llm(messages):
             return json.loads(m.group(0) if m else txt)
         except urllib.error.HTTPError as e:
             _last_llm_call[0] = time.time()
-            if e.code == 429 and attempt < 7:
+            if e.code == 429 and attempt < 11:
                 retry = e.headers.get("retry-after")
                 body_txt = ""
                 try:
-                    body_txt = e.read().decode()[:200]
+                    body_txt = e.read().decode()[:300]
                 except Exception:
                     pass
-                m = re.search(r"try again in ([0-9.]+)s", body_txt)
-                delay = float(retry) if retry else (float(m.group(1)) if m else 10.0 * (attempt + 1))
-                time.sleep(min(delay + 1.0, 120.0))
+                # Groq formats waits as "3.4s", "1m3.4s" or "1h2m3s"
+                m = re.search(r"try again in (?:(\d+)h)?(?:(\d+)m)?([0-9.]+)s", body_txt)
+                if retry:
+                    delay = float(retry)
+                elif m:
+                    delay = 3600 * int(m.group(1) or 0) + 60 * int(m.group(2) or 0) + float(m.group(3))
+                else:
+                    delay = 15.0 * (attempt + 1)
+                time.sleep(min(delay + 1.0, 360.0))
                 continue
-            if attempt == 7:
+            if attempt == 11:
                 raise
             time.sleep(5 * (attempt + 1))
         except Exception:
-            if attempt == 7:
+            if attempt == 11:
                 raise
             time.sleep(5 * (attempt + 1))
 
@@ -135,13 +144,16 @@ def shot_body(shot):
     return b
 
 
-def play_match(mi):
-    out, err = api("/api/match", "POST", {
-        "players": {SIDE: "agent", OPP: "champion"},
-        "labels": {SIDE: args.model, OPP: "champion az_v14d"},
-        "ends": args.ends, "first_hammer": "random"})
-    assert not err, err
-    mid = out["match"]["id"]
+def play_match(mi, resume_mid=None):
+    if resume_mid:
+        mid = resume_mid
+    else:
+        out, err = api("/api/match", "POST", {
+            "players": {SIDE: "agent", OPP: "champion"},
+            "labels": {SIDE: args.model, OPP: "champion az_v14d"},
+            "ends": args.ends, "first_hammer": "random"})
+        assert not err, err
+        mid = out["match"]["id"]
     log = (LOGDIR / f"{args.model.replace('/', '_')}_{mid}.jsonl").open("a")
 
     def note(kind, **kw):
@@ -150,16 +162,29 @@ def play_match(mi):
 
     note("match_start", mid=mid, model=args.model, ends=args.ends)
     print(f"[match {mi}] id={mid} model={args.model}", flush=True)
-    llm_calls = 0
+    llm_calls = {"n": 0}
     history = []   # rolling feedback for the LLM
 
+    while True:
+        try:
+            return _play_turn_loop(mi, mid, note, history, llm_calls)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:   # rate limit exhausted despite retries: cool down, never die
+                note("rate_limit_cooldown", seconds=900)
+                print(f"[match {mi}] 429 storm — cooling down 15 min", flush=True)
+                time.sleep(900)
+                continue
+            raise
+
+
+def _play_turn_loop(mi, mid, note, history, llm_calls):
     while True:
         state, err = api(f"/api/match/{mid}")
         assert not err, err
         m = state["match"]
         if m["status"] != "in_progress":
             note("match_over", totals=m["totals"], winner=m["winner"],
-                 ends=[e["score"] for e in m["ends"] if e.get("score")], llm_calls=llm_calls)
+                 ends=[e["score"] for e in m["ends"] if e.get("score")], llm_calls=llm_calls["n"])
             print(f"[match {mi}] OVER: A {m['totals']['A']} : {m['totals']['B']} B  winner={m['winner']}",
                   flush=True)
             return m
@@ -171,7 +196,7 @@ def play_match(mi):
             if "power play" in text and f"Team {SIDE}" in text and "WAITING" in text:
                 d = llm([{"role": "system", "content": SYSTEM},
                          {"role": "user", "content": text + "\nDecide: powerplay or pass."}])
-                llm_calls += 1
+                llm_calls["n"] += 1
                 if d.get("command") == "powerplay" and d.get("wing") in ("left", "right"):
                     _, e2 = api(f"/api/match/{mid}/powerplay", "POST",
                                 {"side": SIDE, "wing": d["wing"]})
@@ -190,7 +215,7 @@ def play_match(mi):
         previews = 0
         while True:
             d = llm(messages)
-            llm_calls += 1
+            llm_calls["n"] += 1
             cmd = d.get("command", "throw")
             shot = d.get("shot") or {}
             if cmd == "preview" and previews < args.max_previews and shot:
@@ -238,7 +263,7 @@ def play_match(mi):
 
 results = []
 for i in range(args.matches):
-    results.append(play_match(i + 1))
+    results.append(play_match(i + 1, resume_mid=args.resume_mid if i == 0 else None))
 print("\n=== RESULTS ===")
 for m in results:
     ends = [f"E{k+1}:{(e['score']['team'] or '-') }+{e['score']['points']}"
