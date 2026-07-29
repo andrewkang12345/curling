@@ -1475,3 +1475,23 @@ depth question. CRN remains adopted for all future screens/gates. **EXP-052 resu
 ```
 
 Also add a one-line row to the [Summary table](#summary-table).
+
+**EXP-052 raw eval aggregates (auto-appended by _exp052_newrules_loop.sh):**
+
+- newrules_run1: winrate 0.5048 ± 0.0095, dScore +0.0136 ± 0.0329 /end (n=2790 ends, 40 shard-cells)
+- newrules_run2: winrate 0.5039 ± 0.0095, dScore +0.0125 ± 0.0350 /end (n=2790 ends, 40 shard-cells)
+- newrules_run3: winrate 0.4887 ± 0.0095, dScore -0.0219 ± 0.0336 /end (n=2790 ends, 40 shard-cells)
+- oldrules_run1: (no results)
+
+**FINAL VERDICT (2026-07-29): PARITY — az_v14d's play TRANSFERS to the real takeout rules.**
+Pooled over the 3 pre-registered draws (draw-level): dScore **+0.001 ± 0.012/end**, winrate
+0.499 ± 0.005 (n=8,370 ends). The corrected-loop fine-tune on 672 new-rules self-play games
+(6,720 records; train early-stopped at epoch 13, best epoch 9) does NOT improve on the
+unadapted champion under the new rules. Interpretation (pre-registered outcome 2): boundary
+removal mostly deletes stones that were strategically irrelevant when parked, and the
+champion's style rarely relied on early peels that now forfeit — the rules change is real
+but az_v14d already plays it near-optimally relative to what this corpus can teach.
+**Champion: az_v14d/best.pt UNCHANGED, now certified at parity under the new-rules standard.**
+az_v19_newrules/best.pt retained as the new-rules-native alternative (not promoted).
+The manual OLD-rules regression draw (WORLD_BOUNDARY_REMOVAL=0, adaptation-cost footnote)
+is running; its aggregate will be appended below.
