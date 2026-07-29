@@ -1455,7 +1455,36 @@ branching/noise level, now on a proper dose-response with honest budget accounti
 depth retrain does NOT fire. The latent-tree (dynamics-head) route formally inherits the
 depth question. CRN remains adopted for all future screens/gates. **EXP-052 resumed**
 (collection was at 384/600 games).
+---
 
+## EXP-055 / depth-null diagnosis — WHY is depth flat? (pre-registered 2026-07-29)
+
+**Context.** EXP-054 closed depth as not-a-lever, but two mechanistic explanations remain
+untested, and the pooled CI (|Δ| ≲ 0.1/end) still contains effect sizes that would matter.
+User directive: run both diagnostics.
+
+**055a — amortization hypothesis (--mode weak).** The EXP-053 primary contrast (d3 beam vs
+compute-matched d2, ke48/128 sims) rerun with the HUMAN PRIOR as proposal/rollout policy
+inside both operators (adjudication unchanged: champion playouts T=20). Pre-registered: if
+the depth effect (mean adjudicated playout Δ) is clearly positive here while flat with the
+champion policy, the null is explained — champion-distilled rollouts already amortize the
+extra ply, and depth will never pay inside a loop that keeps strengthening the policy.
+
+**055b — spine-bias hypothesis (--mode sb).** Stochastic-branching d3: ply 2 branches on 3
+realized-post medoids (greedy farthest-point over k_ego noisy executions, weighted by
+assignment counts) so the opponent replies to boards that actually happen; ply 3 stays on
+the per-realization spine. ~2.7x d3_lo cost (~375s/ply, vs stored d2_hi's 483s — control
+stays over-budgeted, conservative). Evaluated on EXP-054's EXACT seed-54 roots and
+adjudicated against the STORED d2_hi actions (T=20 playouts, primary) and stored d3_hi
+actions (paired MC, secondary — did the fix change/improve the decisions?). Pre-registered:
+a clear positive mean Δ vs d2_hi (t>2), where deterministic-spine d3_hi was flat (+0.032 ±
+0.036), certifies the spine as the artifact and the sb-operator as the Phase-1 candidate.
+
+**Both flat ->** the depth question is closed for simulator trees: noise + strong amortized
+policy genuinely shorten the useful lookahead horizon (backgammon-like), and only the
+latent-space route remains. Primary readout for both modes: mean adjudicated Δ with
+draw-level t-test (not just resolved-wins binomial — the fat-tailed resolution floor was
+EXP-053/054's power problem).
 
 
 ## Template for a new entry
@@ -1495,3 +1524,5 @@ but az_v14d already plays it near-optimally relative to what this corpus can tea
 az_v19_newrules/best.pt retained as the new-rules-native alternative (not promoted).
 The manual OLD-rules regression draw (WORLD_BOUNDARY_REMOVAL=0, adaptation-cost footnote)
 is running; its aggregate will be appended below.
+
+**OLD-rules regression draw (manual, WORLD_BOUNDARY_REMOVAL=0):** winrate 0.4935, dScore +0.0072 ± 0.0284/end (n=2790) — no adaptation cost detectable; the new-rules fine-tune did not damage old-rules play.

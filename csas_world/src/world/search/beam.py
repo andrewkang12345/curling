@@ -87,11 +87,30 @@ def _screen(policy, amean_t, astd_t, x, c, horizon, sie, root_persp, n_cands,
     return cands, np.asarray(q, np.float64), np.asarray(q_se, np.float64)
 
 
+def _representative_posts(x, c, a, horizon, noise, ke: int = 8, m: int = 3):
+    """m realized posts of throw ``a`` (greedy farthest-point medoids over the ke
+    noisy executions) + weights = fraction of executions nearest each medoid.
+    Used by stochastic branching: the opponent replies to boards that actually
+    happen, not to the intended one."""
+    realized = noise.sample_batch(np.asarray(a, np.float32)[None], ke).reshape(-1, 4)
+    posts, _ = env_bridge.apply_legality(x, env_bridge.simulate(x, c, realized), horizon, c)
+    D = np.linalg.norm(posts[:, None, :] - posts[None, :, :], axis=-1)   # (ke, ke)
+    reps = [int(np.argmin(D.sum(axis=1)))]                                # central medoid
+    while len(reps) < min(m, len(posts)):
+        far = int(np.argmax(D[:, reps].min(axis=1)))
+        if far in reps:
+            break
+        reps.append(far)
+    assign = np.argmin(D[:, reps], axis=1)
+    w = np.array([(assign == j).sum() for j in range(len(reps))], np.float64)
+    return posts[reps], w / w.sum()
+
+
 def screen_beam_choose(policy, amean_t, astd_t, amean_np, astd_np, x, c, horizon, sie,
                        cfg, rng, device, noise,
                        beam_root: int = 6, opp_cands: int = 16, beam_opp: int = 3,
                        my_cands: int = 12, k_ego: Optional[int] = None,
-                       crn: bool = True) -> Optional[Dict]:
+                       crn: bool = True, branch_reps: int = 0) -> Optional[Dict]:
     """Depth-3 minimax on the deterministic spine.
 
     ply 1 (root, us):    stage-1 robust screen (same dense proposal as d2) -> top beam_root
@@ -122,17 +141,15 @@ def screen_beam_choose(policy, amean_t, astd_t, amean_np, astd_np, x, c, horizon
     c1 = env_bridge.next_condition(c, sie)
     n_chains = 0
     q3 = np.full(kb, -np.inf, dtype=np.float64)
-    for i, ridx in enumerate(order):
-        a = cands1[int(ridx)]
-        post1, _ = env_bridge.apply_legality(x, env_bridge.simulate_one(x, c, a)[None], horizon, c)
-        s1 = post1[0]
-        # ---- ply 2: opponent replies (opponent minimises root-persp q) ----
+
+    def subtree_value(s1, i_unused=None):
+        """Opponent reply + our follow-up from board s1 (root perspective)."""
+        nonlocal n_chains
         oc, oq, _ose = _screen(policy, amean_t, astd_t, s1, c1, horizon - 1, sie, persp,
                                opp_cands, ke, cfg, rng, device, noise, crn=crn)
         n_chains += opp_cands * ke
         if horizon - 1 <= 1:
-            q3[i] = float(oq.min())       # opponent's last throw: its best reply directly
-            continue
+            return float(oq.min())        # opponent's last throw: its best reply directly
         ko = min(int(beam_opp), len(oq))
         opp_order = np.argsort(oq)[:ko]   # most dangerous first
         c2 = env_bridge.next_condition(c1, sie)
@@ -147,7 +164,19 @@ def screen_beam_choose(policy, amean_t, astd_t, amean_np, astd_np, x, c, horizon
                                     my_cands, ke, cfg, rng, device, noise, crn=crn)
             n_chains += my_cands * ke
             vals[j] = float(mq.max())
-        q3[i] = float(vals.min())         # opponent picks its best (worst for us)
+        return float(vals.min())          # opponent picks its best (worst for us)
+
+    for i, ridx in enumerate(order):
+        a = cands1[int(ridx)]
+        if branch_reps and noise is not None:
+            # stochastic branching (EXP-055b): the opponent responds to REALIZED
+            # boards; value = weighted mean of per-realization minimax values
+            reps, w = _representative_posts(x, c, a, horizon, noise, ke=ke, m=int(branch_reps))
+            q3[i] = float(sum(wi * subtree_value(s1) for s1, wi in zip(reps, w)))
+        else:
+            post1, _ = env_bridge.apply_legality(x, env_bridge.simulate_one(x, c, a)[None],
+                                                 horizon, c)
+            q3[i] = subtree_value(post1[0])
 
     w = int(np.argmax(q3))
     return {"action": np.asarray(cands1[int(order[w])], np.float32), "q": float(q3[w]),

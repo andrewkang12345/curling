@@ -1,0 +1,4 @@
+{"t": "16:41:20", "kind": "match_start", "mid": "6ee199512d2c", "model": "openai/gpt-oss-120b", "ends": 1}
+{"t": "16:41:21", "kind": "powerplay", "wing": "right", "err": null, "thought": "Call powerplay to place button stone and corner guard, leveraging hammer for multi\u2011point potential"}
+{"t": "16:41:28", "kind": "throw", "n": 2, "end": 1, "shot": {"type": "draw", "target": [-0.6, -1.0]}, "solver": {"achieved_error_m": 0.241, "target": [-0.6000000238418579, -1.0]}, "illegal": false, "value_A": 1.0299, "thought": "Place a left-side guard to protect future draws and limit B's angles.", "replies": [3], "end_result": null}
+{"t": "16:41:34", "kind": "throw_rejected", "shot": {"type": "contact", "target": ["-1.090.53"], "weight": "medium"}, "err": [{"type": "float_parsing", "loc": ["body", "target", 0], "msg": "Input should be a valid number, unable to parse string as a number", "input": "-1.090.53"}]}
