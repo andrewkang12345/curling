@@ -33,6 +33,7 @@ ap.add_argument("--horizons", default="1,2,3,4,5,6,7,8,9,10")
 ap.add_argument("--gpus", default="0,1,2,3")
 ap.add_argument("--shards", type=int, default=0, help="root shards per horizon (0 => = #gpus)")
 ap.add_argument("--noisy", action="store_true")
+ap.add_argument("--sel-noise", type=int, default=0)
 ap.add_argument("--out-dir", default="eval_out/parallel")
 args = ap.parse_args()
 
@@ -69,6 +70,8 @@ def launch(job, gpu):
            "--N", str(args.N), "--horizons", str(h), "--root-shard", f"{s}/{SHARDS}", "--out", op]
     if args.noisy:
         cmd.append("--noisy")
+    if args.sel_noise:
+        cmd += ["--sel-noise", str(args.sel_noise)]
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), **GNN_ENV)
     return subprocess.Popen(cmd, env=env, stdout=open(op + ".log", "w"), stderr=subprocess.STDOUT)
 

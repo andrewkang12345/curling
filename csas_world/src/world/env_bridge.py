@@ -243,6 +243,7 @@ def evaluate_value(value_model, states_norm: np.ndarray, cond: np.ndarray, devic
     """
     import torch
 
+    batch_size = int(os.environ.get("VALUE_EVAL_BATCH", batch_size))  # GPU-sharing knob
     states = np.atleast_2d(np.asarray(states_norm, dtype=np.float32))
     cond = np.asarray(cond, dtype=np.float32)
     c = np.broadcast_to(cond, (states.shape[0], COND_DIM)).astype(np.float32)

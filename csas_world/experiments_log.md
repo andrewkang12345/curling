@@ -1537,6 +1537,29 @@ never separately measured). Predictions: (1) StT > record, gains concentrated h>
 terminal-rollout variance is worst; (2) factorial shows which component pays (truncation vs
 searched steps); (3) if StT wins -> it becomes the collection operator and its truncated
 value estimates double as TD-flavored value targets -> Phase-1 retrain.
+---
+
+## EXP-057 / eval-protocol validation — is k=2 robust selection ranking-stable at k=8? (pre-registered 2026-07-30)
+
+**Question (user).** Training targets average 8 noise realizations; the canonical eval
+protocol selects with 2 (both players, symmetric — sound as a comparison); the arena deploys
+8. Two caveats need closing: (1) k=2 selection noise dilutes skill gaps (promotions
+conservative, nulls weaker); (2) rankings are certified at k=2 and could in principle
+reorder at k=8 (the arena's deployed configuration was never itself certified).
+
+**Design** (`scripts/_exp057_k8_stability.sh`, queued behind EXP-056's last shard). One k=8
+draw per decided matchup, each at its OWN certified rules, changing ONLY k (new
+`--sel-noise` override threaded through `_eval_parallel`/`_eval_highN`, printed as a
+PROTOCOL OVERRIDE banner):
+- M1 az_v14d vs az_v9 champion, OLD rules — certified k=2: ds +0.102 ± 0.005/end.
+- M2 az_v19_newrules vs az_v14d, NEW rules — certified k=2: ds +0.001 ± 0.012/end (parity).
+
+**Pre-registered.** Validation passes iff M1's k=8 dScore stays positive (>2·SE) — ranking
+stable — and M2 stays within noise of parity or the SAME sign region (a small positive at
+k=8 would sharpen the EXP-052 null's interpretation, not overturn a promotion). Expected per
+dilution: |M1 k=8| >= |M1 k=2|. Standard going forward regardless of outcome: k=2 remains
+the canonical gate protocol (cost + 50-experiment comparability); any future PROMOTION adds
+one k=8 confirmation draw; the arena's k=8 deployment is recorded per match.
 
 
 ## Template for a new entry

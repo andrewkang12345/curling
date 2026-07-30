@@ -22,6 +22,7 @@ ap.add_argument("--N", type=int, default=250)
 ap.add_argument("--horizons", default="2,3,4,5")
 ap.add_argument("--out", default=None)
 ap.add_argument("--noisy", action="store_true", help="robust selection (avg over noise_samples) + noisy realized throws")
+ap.add_argument("--sel-noise", type=int, default=0, help="override cfg.search.noise_samples (robust-selection realizations; 0 = canonical protocol default)")
 ap.add_argument("--root-shard", default=None, help="k/n: evaluate only the disjoint root subset k of n (within-horizon parallel sharding)")
 args = ap.parse_args()
 root_shard = None
@@ -29,6 +30,9 @@ if args.root_shard:
     _k, _n = args.root_shard.split("/"); root_shard = (int(_k), int(_n))
 
 cfg = Config()
+if args.sel_noise:
+    cfg.search.noise_samples = int(args.sel_noise)
+    print(f'[eval] PROTOCOL OVERRIDE: sel_noise_samples={cfg.search.noise_samples}', flush=True)
 horizons = [int(x) for x in args.horizons.split(",")]
 if args.vs == "prior":
     opp_kind = "csas"
