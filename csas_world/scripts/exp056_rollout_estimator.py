@@ -48,6 +48,7 @@ ap.add_argument("--dn-thresh", type=float, default=2.5)
 ap.add_argument("--trunc", type=int, default=4)
 ap.add_argument("--n-search", type=int, default=6)
 ap.add_argument("--seed", type=int, default=56)
+ap.add_argument("--arms", default="RT,RtT,ST,StT", help="factorial arms to run (record always runs)")
 ap.add_argument("--aggregate", action="store_true")
 args = ap.parse_args()
 
@@ -168,12 +169,13 @@ def screen_arm(x, c, h, sie, cands, k_ego, n_search, trunc, rng):
     return np.asarray(cands[w], np.float32), float(q[w])
 
 
-ARMS = {
+ARMS_ALL = {
     "RT":  dict(k_ego=8, n_search=1, trunc=0),
     "RtT": dict(k_ego=8, n_search=1, trunc=args.trunc),
     "ST":  dict(k_ego=4, n_search=args.n_search, trunc=0),
     "StT": dict(k_ego=4, n_search=args.n_search, trunc=args.trunc),
 }
+ARMS = {k: v for k, v in ARMS_ALL.items() if k in args.arms.split(",")}
 
 
 def dn_dist(a, b):
@@ -258,6 +260,8 @@ for h in [int(v) for v in args.horizons.split(",")]:
         rec["ops"]["record"] = {"action": [round(float(v), 6) for v in r2["action"]],
                                 "q": round(r2["q"], 4), "seconds": round(time.time() - t0, 1)}
         for a_name, b_name in MC_PAIRS:
+            if a_name not in acts or b_name not in acts:
+                continue
             key = f"{a_name}_vs_{b_name}"
             dn = dn_dist(acts[a_name], acts[b_name])
             rec["dn"][key] = round(dn, 2)

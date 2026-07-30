@@ -1537,6 +1537,26 @@ never separately measured). Predictions: (1) StT > record, gains concentrated h>
 terminal-rollout variance is worst; (2) factorial shows which component pays (truncation vs
 searched steps); (3) if StT wins -> it becomes the collection operator and its truncated
 value estimates double as TD-flavored value targets -> Phase-1 retrain.
+
+**RESULTS (96/96 plies, 2026-07-30) — FIRST POSITIVE OPERATOR SIGNAL, pending replication.**
+Wall-clock/ply: RT 20s, RtT 12s, ST 63s, StT 32s, record 54s. PRIMARY (StT vs record,
+playouts T=20): **meanΔ = +0.108 ± 0.063/end (t=1.72), resolved 7/9 (p=0.090), positive at
+ALL horizons** (h6 +0.114 / h8 +0.075 / h10 +0.136) — and StT costs **60% of record**. MC
+secondary −0.036 (the MC adjudicator is itself a raw-terminal estimator — biased toward the
+record's estimand; playouts pre-registered primary for exactly this). Factorial (MC): ST
+alone −0.089 (t=−1.80; searched-to-terminal at ke 4 is worse — truncation is what makes
+searched steps affordable/effective), RtT alone +0.033 ns, record-vs-RT (tree stage's
+marginal value, first measurement) +0.064 ns.
+
+**EXP-056b (pre-registered fresh-roots replication, queued behind EXP-057).** t=1.72 is
+EXP-053 déjà vu; discipline requires replication before promotion. Power analysis: between-
+pair variance dominates (per-pair T=20 noise is a minority), so the extension adds PAIRS,
+not playouts: +96 fresh val roots (h {6,8,10} x 32, seed 57), arms StT + record only,
+T=20 playout adjudication. Verdict rule (two-look pooled, n≈192): promote StT to collection
+operator iff pooled playout meanΔ t ≥ 2.1 AND the replication's standalone meanΔ > 0.
+If promoted -> Phase-1: StT-collected corpus (its truncated leaf values double as
+TD-flavored value targets), corrected-loop retrain, incumbent gate with k=8 confirmation
+draw (per EXP-057 policy).
 ---
 
 ## EXP-057 / eval-protocol validation — is k=2 robust selection ranking-stable at k=8? (pre-registered 2026-07-30)
