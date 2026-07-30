@@ -1486,6 +1486,28 @@ latent-space route remains. Primary readout for both modes: mean adjudicated Δ 
 draw-level t-test (not just resolved-wins binomial — the fat-tailed resolution floor was
 EXP-053/054's power problem).
 
+**RESULTS (2026-07-30): BOTH HYPOTHESES REJECTED — depth question CLOSED with mechanism.**
+- 055a weak-policy (128 plies, prior rollouts): playout meanΔ **−0.049 ± 0.050** (t=−0.98),
+  MC −0.009 ± 0.040. No depth edge appears even with a weak policy — amortization by the
+  champion policy is NOT what hides depth's value; there is no hidden value to amortize.
+- 055b stochastic branching (96 plies, EXP-054's exact roots vs stored actions): d3_sb vs
+  d2_hi playout meanΔ **−0.105 ± 0.062** (t=−1.68, leaning NEGATIVE), MC +0.002; d3_sb vs
+  deterministic-spine d3_hi MC +0.033 ± 0.047 — fixing the spine does not unlock depth.
+- Reading: both arms leaning ≤0 is consistent with minimax over noisy continuous-action Q
+  estimates AMPLIFYING estimator noise (hard min/max over sampled replies) versus the
+  soft, noise-integrating terminal rollouts of the 1-ply screen. In this execution-noise
+  regime the game is backgammon-like: the reply distribution is what matters, and rollouts
+  already integrate it; explicit adversarial sharpening adds bias, not information.
+
+**CLOSURE.** Simulator-tree depth (2->3 ply, any budget tested, deterministic or stochastic
+spine, strong or weak policy) does not improve decisions over the certified noise-robust
+2-ply screen_tree operator. Five studies agree (053, 054, 055a, 055b + the EXP-053
+replication failure). Keep: CRN screens; the operator of record stays exp_037 screen_tree.
+The only remaining depth avenue is the latent-space (dynamics-head) tree, which changes the
+cost model rather than the statistics, and should be motivated by dynamics-head fidelity
+first. dScore-primary reporting throughout; champion unchanged (az_v14d).
+
+
 
 ## Template for a new entry
 
