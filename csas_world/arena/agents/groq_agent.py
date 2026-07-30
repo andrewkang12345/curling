@@ -237,10 +237,22 @@ def _play_turn_loop(mi, mid, note, history, llm_calls):
             # commit
             res, err = api(f"/api/match/{mid}/throw", "POST", shot_body(shot))
             if err:
+                rejects = getattr(res, "_r", None)
                 note("throw_rejected", shot=shot, err=err)
-                messages.append({"role": "assistant", "content": json.dumps(d)})
-                messages.append({"role": "user", "content": f"Throw rejected: {err}. Fix and respond again."})
-                continue
+                n_rej = sum(1 for mm in messages if isinstance(mm.get("content"), str)
+                            and mm["content"].startswith("Throw rejected"))
+                if n_rej >= 3:   # stop arguing: play a safe center draw so the match progresses
+                    note("fallback_shot", after_rejects=n_rej + 1)
+                    res, err = api(f"/api/match/{mid}/throw", "POST",
+                                   {"side": SIDE, "type": "draw", "target": [0.0, 0.3]})
+                    if err:
+                        raise RuntimeError(f"fallback throw failed: {err}")
+                else:
+                    messages.append({"role": "assistant", "content": json.dumps(d)})
+                    messages.append({"role": "user", "content":
+                                     f"Throw rejected: {err}. NOTE: 'target' must be TWO decimal "
+                                     f"numbers in an array, e.g. [-2.0, 0.8]. Fix and respond again."})
+                    continue
             rec = res["result"]["throw"]
             solver = res.get("solver", {})
             note("throw", n=rec["n"], end=rec["end"], shot=shot, solver=solver,

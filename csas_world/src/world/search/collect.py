@@ -162,7 +162,8 @@ def _legality_batch(pre: np.ndarray, posts: np.ndarray, horizon: int, cond: np.n
 
 def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, root_persp,
                                device, rng, noise, temp, std_scale,
-                               value_model=None, n_search=1) -> np.ndarray:
+                               value_model=None, n_search=1,
+                               max_steps=0, leaf_value_model=None) -> np.ndarray:
     """Roll from each state to terminal; return realized end margins (root persp). With
     ``value_model`` + ``n_search>1`` (EXP-014 "search-based rollout"): at each ply the to-move
     player plays VALUE-GREEDY -- sample n_search policy candidates, and pick the one that minimises
@@ -174,7 +175,15 @@ def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, ro
     B = st.shape[0]
     cc = np.asarray(cond, dtype=np.float32).copy()
     hh = int(h)
+    steps_left = int(max_steps) if (max_steps and leaf_value_model is not None) else -1
     while hh >= 1 and B > 0:
+        if steps_left == 0:
+            # EXP-056 truncated leaf: V(frontier) from the root's perspective (the value
+            # head is conditioned on the to-move player encoded in cc)
+            v = env_bridge.evaluate_value(leaf_value_model, st, cc, device).astype(np.float64)
+            sign = 1.0 if int(round(cc[2])) == int(root_persp) else -1.0
+            return sign * v
+        steps_left -= 1
         cb = np.broadcast_to(cc, (B, 3)).astype(np.float32)
         if value_model is not None and n_search > 1:
             cands = np.asarray(_sample_actions_batch(policy, amean_t, astd_t, st, cb, n_search, device,
@@ -222,7 +231,7 @@ def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, ro
 def score_candidates_terminal(policy, amean_t, astd_t, x, c, cands, horizon, sie,
                               perspective_block, device, rng, noise, temp, std_scale,
                               value_model=None, n_search=1, k_ego=1, return_std=False,
-                              crn=False):
+                              crn=False, max_steps=0, leaf_value_model=None):
     """Q[i] = realized terminal end-margin (root persp) of playing candidate i then rolling to
     terminal. EXP-014: ``n_search>1`` + ``value_model`` -> value-greedy (searched) rollout; ``k_ego>1``
     + noise -> 1-ply-robust (mean over k_ego noisy executions of each candidate). Det posts returned
@@ -235,7 +244,8 @@ def score_candidates_terminal(policy, amean_t, astd_t, x, c, cands, horizon, sie
     posts_all, illegal_all = env_bridge.apply_legality(x, env_bridge.simulate(x, c, realized), horizon, c)
     q_all = _mc_rollout_terminal_batch(policy, amean_t, astd_t, posts_all, nc, horizon - 1, sie,
                                        perspective_block, device, rng, noise, temp, std_scale,
-                                       value_model=value_model, n_search=n_search)
+                                       value_model=value_model, n_search=n_search,
+                                       max_steps=max_steps, leaf_value_model=leaf_value_model)
     if ke > 1:
         q2 = q_all.reshape(C, ke)
         q = q2.mean(axis=1)

@@ -1506,7 +1506,37 @@ replication failure). Keep: CRN screens; the operator of record stays exp_037 sc
 The only remaining depth avenue is the latent-space (dynamics-head) tree, which changes the
 cost model rather than the statistics, and should be motivated by dynamics-head fidelity
 first. dScore-primary reporting throughout; champion unchanged (az_v14d).
+---
 
+## EXP-056 / rollout-estimator factorial (the Sage-3T question) — IN FLIGHT 2026-07-30
+
+**Motivation (user).** Frontier backgammon engines (Open Sage 3T / XG Roller++, 7/2026
+benchmark) don't win by deep root trees — 4-ply fixed search (0.41 PR) LOSES to sampled
+truncated rollouts whose every internal decision is 3-ply, evaluated by the value net at a
+~7-turn horizon (0.21 PR). Our EXP-053/054/055 arc tested (and rejected) exactly the losing
+axis — root-tree depth. The winning axis — IN-ROLLOUT policy strength + truncation — was
+never tested. Our operator of record = rollouts with a RAW 0-ply behavior policy to
+terminal: their known-weak configuration of the winning family.
+
+**Design** (`scripts/exp056_rollout_estimator.py`; h {6,8,10} x 32 val roots seed 56; all
+factorial arms score the SAME dense candidate pool per ply — proposal variance excluded):
+2x2 on the rollout estimator + reference:
+  RT  raw->terminal, ke 8 (current stage-1)      | RtT raw->trunc@4 + champion-V leaf, ke 8
+  ST  searched (EXP-014 value-greedy, n=6)->terminal, ke 4 | StT searched + trunc@4 + V, ke 4
+  record = full exp_037 screen_tree (deployment reference).
+Truncated leaf = new `max_steps`/`leaf_value_model` in `_mc_rollout_terminal_batch`
+(V from root perspective at the frontier; az_v10-12's value-leaf objection is weaker now:
+the champion V is matchup-calibrated and sits 4+ plies from the root). Searched arms halve
+k_ego (variance-reduced rollouts; budget). Smoke wall-clocks/ply at h6: RT 22s, RtT 15s,
+ST 46s, StT 33s, record 39s — primary contrast StT(33s) vs record(39s) is budget-fair.
+
+**Adjudication & pre-registered readouts.** Paired guided playouts T=20 on PRIMARY
+StT-vs-record (mean adjudicated Δ, t-test); paired raw-terminal MC k=64 CRN on the
+factorial contrasts (each cell vs RT) + record-vs-RT (the tree stage's marginal value,
+never separately measured). Predictions: (1) StT > record, gains concentrated h>=8 where
+terminal-rollout variance is worst; (2) factorial shows which component pays (truncation vs
+searched steps); (3) if StT wins -> it becomes the collection operator and its truncated
+value estimates double as TD-flavored value targets -> Phase-1 retrain.
 
 
 ## Template for a new entry
