@@ -1557,6 +1557,27 @@ operator iff pooled playout meanΔ t ≥ 2.1 AND the replication's standalone me
 If promoted -> Phase-1: StT-collected corpus (its truncated leaf values double as
 TD-flavored value targets), corrected-loop retrain, incumbent gate with k=8 confirmation
 draw (per EXP-057 policy).
+
+**EXP-056b RESULT (96/96 fresh plies, 2026-07-31): REPLICATION FAILED — StT NOT promoted.**
+Replication alone: playout meanΔ **−0.034 ± 0.064/end** (t=−0.52; wave-1 was +0.108 ± 0.063).
+Pooled two-wave (n=191 pairs): **+0.038 ± 0.045/end, t=0.83** — both pre-registered
+promotion conditions fail. Operator of record remains exp_037 screen_tree.
+
+Honest residuals (hypothesis-generating only, both post-hoc after a failed primary):
+- StT runs at ~60% of record's cost with pooled strength a statistical tie — but the pooled
+  lower 95% CI (−0.05/end) is exactly at the non-inferiority boundary, so a collection-
+  operator swap for throughput would need its own certification (plus estimand-shift risk).
+- h-strata consistent across BOTH waves: h10 positive twice (+0.136, +0.086; pooled +0.111
+  ± 0.077), h6 the drag — truncation+V may pay only when terminal is far (the pre-registered
+  prediction), suggesting a horizon-gated hybrid as a future candidate.
+
+**Meta-lesson (now 3-for-3: EXP-053, EXP-056, and the EXP-054-lo sign flip):** in this
+domain, operator signals at t≈1.7 on 96-192 adjudicated pairs DO NOT survive fresh-roots
+replication. True per-decision operator differences, if any, are ≲0.05/end — at the floor of
+affordable adjudication and small against training-side levers (az_v14d's training-side win
+was +0.19/end at deployment settings per EXP-057). The search-operator research program is
+CLOSED pending a qualitatively new idea; remaining strength levers are training-side (data
+scale — the 9x corpus test — and architecture).
 ---
 
 ## EXP-057 / eval-protocol validation — is k=2 robust selection ranking-stable at k=8? (pre-registered 2026-07-30)
