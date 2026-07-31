@@ -161,6 +161,10 @@ class SearchCfg:
     mcts_max_depth: int = 0          # 0 = horizon-bound tree (default); 2 = the 2-ply training-time
                                      # operator (root expand → child eval via leaf fn, no grandchildren).
                                      # Use with use_mcts_tree=true + value_leaf_bootstrap=true.
+    # EXP-058 "stt" scorer (searched + truncated rollout estimator, EXP-056 cell):
+    stt_n_search: int = 6            # value-greedy candidates per in-rollout step
+    stt_k_ego: int = 4               # noisy executions per root candidate (CRN)
+    stt_trunc: int = 4               # rollout throws before the value-head leaf
     screen_topk: int = 8             # az_v12 screen_tree scorer: survivors kept from the noise-robust
                                      # flat screen for the stage-2 KR-UCT refinement tree.
     dist_sig_t: float = 0.0          # az_v13: >0 -> distill a ply ONLY if the screen's top-1 vs top-2

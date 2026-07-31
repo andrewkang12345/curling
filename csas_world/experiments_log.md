@@ -1575,9 +1575,13 @@ Honest residuals (hypothesis-generating only, both post-hoc after a failed prima
 domain, operator signals at t≈1.7 on 96-192 adjudicated pairs DO NOT survive fresh-roots
 replication. True per-decision operator differences, if any, are ≲0.05/end — at the floor of
 affordable adjudication and small against training-side levers (az_v14d's training-side win
-was +0.19/end at deployment settings per EXP-057). The search-operator research program is
-CLOSED pending a qualitatively new idea; remaining strength levers are training-side (data
-scale — the 9x corpus test — and architecture).
+was +0.19/end at deployment settings per EXP-057). **Scoping correction (user, 2026-07-31):** this closes the DROP-IN inference-operator
+question only. EXP-056 ranked a candidate pool distilled from screen_tree's preferences,
+with a value head never calibrated on StT frontier states, adjudicated under incumbent-
+champion continuations — the self-consistent question (train StT, infer StT) vs (train
+screen, infer screen) is untested, and the ecosystem mismatch could have hurt OR helped.
+The search-operator program is closed for zero-training swaps; the self-consistent StT
+system is tested by EXP-058 below.
 ---
 
 ## EXP-057 / eval-protocol validation — is k=2 robust selection ranking-stable at k=8? (pre-registered 2026-07-30)
@@ -1601,6 +1605,35 @@ k=8 would sharpen the EXP-052 null's interpretation, not overturn a promotion). 
 dilution: |M1 k=8| >= |M1 k=2|. Standard going forward regardless of outcome: k=2 remains
 the canonical gate protocol (cost + 50-experiment comparability); any future PROMOTION adds
 one k=8 confirmation draw; the arena's k=8 deployment is recorded per match.
+---
+
+## EXP-058 / az_v20 — SELF-CONSISTENT StT ECOSYSTEM TEST — IN FLIGHT 2026-07-31
+
+**Question (user).** After collecting StT targets and retraining self-consistently, is an
+StT-trained system stronger than the screen_tree-trained control — i.e., (train StT, infer
+deployed) vs (train screen, infer deployed)? EXP-056b only refuted StT as a zero-training
+drop-in inside the incumbent ecosystem.
+
+**Design.** The control arm ALREADY EXISTS: az_v19_newrules = az_v14d fine-tuned on 672
+new-rules screen_tree-target games (exp_052 recipe). New arm az_v20_stt: identical in every
+respect except the per-ply distillation-target operator = the StT estimator (searched
+value-greedy steps n=6, k_ego 4 CRN, truncated@4 + incumbent-V leaf; new selfplay scorer
+"stt", --value-world az_v14d). Same generator policy, same rules, same sig-gating (t>=2,
+tie-break pooling), same target size (~600 games), same trainer recipe/init. Value targets
+stay realized returns (one change at a time; the truncated-estimate-as-value-target variant
+is a follow-up arm if this one moves).
+
+**Gate (pre-registered; SHORTENED per user for an early conclusion).** Primary: az_v20 vs
+az_v19 (the matched train-side contrast), ONE draw at k=4 selection, N=250 x 10 horizons x 2
+orders = 5,000 ends (~2h; SE(ds) ≈ 0.020, and k=4 halves the k=2 selection dilution per
+EXP-057, so per-end discrimination is sharper). The full canonical battery (3 draws k=2 +
+k=8 confirmation + vs-incumbent) runs only if the early draw is promising (|ds| > 2·SE). Outcomes: az_v20 > az_v19
+=> the StT estimand teaches something screen_tree doesn't (ecosystem effect real; iterate);
+parity => one-generation StT self-consistency adds nothing beyond the drop-in null (bounds
+ONE generation only — the policy only partially reshapes toward StT support in one cycle,
+pre-registered caveat); az_v20 < az_v19 => StT targets are WORSE to learn from at this
+noise level. Cost: ~16-20h collection (StT is ~60% of screen_tree's per-ply cost), ~3h
+train, ~10h evals.
 
 
 ## Template for a new entry

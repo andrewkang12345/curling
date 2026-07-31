@@ -110,6 +110,66 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 lp = legal[:n_pol]
                 if legal.any() and lp.any():
                     diag.append((int(hh), float(q[legal].max() - q[:n_pol][lp].max())))
+        elif scorer == "stt":
+            # EXP-058: flat screen scored by the searched+truncated estimator (EXP-056 StT
+            # cell): value-greedy in-rollout steps (n_search) + champion-V leaf at trunc.
+            # Requires value_model (--value-world = the incumbent's value head).
+            cands = generate_candidates(policy, amean_t, astd_t, st, cc, cfg, rng, device)
+            ke0 = int(getattr(cfg, "stt_k_ego", 4))
+            stt_kw = dict(value_model=value_model, n_search=int(getattr(cfg, "stt_n_search", 6)),
+                          max_steps=int(getattr(cfg, "stt_trunc", 4)), leaf_value_model=value_model)
+            q, det_posts, det_illegal, q_se = score_candidates_terminal(
+                policy, amean_t, astd_t, st, cc, cands, hh, sie, int(round(cc[2])),
+                device, rng, noise, cfg.rollout_temp, cfg.std_scale,
+                k_ego=ke0, return_std=True, crn=True, **stt_kw)
+            q = env_bridge.mask_illegal_scores(q, det_illegal)
+            legal = q > -1e8
+            if not legal.any():
+                return None
+            smoothed = env_bridge.kr_smooth(cands, q, amean_np, astd_np,
+                                            cfg.kernel_bandwidth, cfg.uct_c)
+            smoothed = env_bridge.mask_illegal_scores(smoothed, det_illegal)
+            top_idx, weights = env_bridge.soft_topk(smoothed, min(M, int(legal.sum())),
+                                                    cfg.policy_temperature)
+            order = np.argsort(np.where(legal, q, -1e18))[::-1]
+            # collect-time significance gate (az_v13 machinery on the StT estimator)
+            conf = 1.0
+            sig_t = float(getattr(cfg, "dist_sig_t", 0.0) or 0.0)
+            if sig_t > 0.0 and int(legal.sum()) >= 2:
+                a_i, b_i = int(order[0]), int(order[1])
+                gap = float(q[a_i] - q[b_i])
+                se = float(np.sqrt(q_se[a_i] ** 2 + q_se[b_i] ** 2)) if q_se is not None else float("inf")
+                t_stat = gap / se if se > 0 else 0.0
+                lo = float(getattr(cfg, "dist_sig_lo", 0.8))
+                if lo <= t_stat < sig_t:
+                    ke1 = int(getattr(cfg, "dist_sig_extra_k", 16))
+                    q_x, _, _, se_x = score_candidates_terminal(
+                        policy, amean_t, astd_t, st, cc, cands[[a_i, b_i]], hh, sie,
+                        int(round(cc[2])), device, rng, noise, cfg.rollout_temp, cfg.std_scale,
+                        k_ego=ke1, return_std=True, crn=True, **stt_kw)
+                    n_tot = ke0 + ke1
+                    q_c = [(ke0 * q[i] + ke1 * q_x[j]) / n_tot for j, i in enumerate((a_i, b_i))]
+                    se_c = [np.sqrt(ke0 ** 2 * q_se[i] ** 2 + ke1 ** 2 * se_x[j] ** 2) / n_tot
+                            for j, i in enumerate((a_i, b_i))]
+                    gap = float(q_c[0] - q_c[1])
+                    se = float(np.sqrt(se_c[0] ** 2 + se_c[1] ** 2))
+                    t_stat = gap / se if se > 0 else 0.0
+                conf = 1.0 if t_stat >= sig_t else 0.0
+            if diag is not None:
+                diag.append((int(hh), float(conf)))
+            dists.append((cands[top_idx].copy(), weights.copy(), conf))
+            a = np.asarray(cands[int(order[0])], np.float32)
+            if noise is not None:
+                a = noise.sample_batch(a[None], 1).reshape(4).astype(np.float32)
+            post, _ = env_bridge.apply_legality(st, env_bridge.simulate_one(st, cc, a)[None], hh, cc)
+            acts_exec.append(a.copy())
+            st = post[0]
+            cc = env_bridge.next_condition(cc, sie)
+            hh -= 1
+            states.append(st.copy())
+            conds.append(cc.copy())
+            persps.append(int(round(cc[2])))
+            continue
         elif scorer == "screen_tree":
             # ---- stage 1: noise-robust flat screen over the dense proposal ----
             res1 = search_state(policy, amean_t, astd_t, amean_np, astd_np, None,
@@ -312,11 +372,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=1)
     ap.add_argument("--shard-id", type=int, default=0)
-    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree"], default="tree",
+    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt"], default="tree",
                     help="tree = 2-ply KR-UCT with value-head leaves (az_v9); "
                          "terminal = value-free dense-candidate MC-to-terminal operator (az_v10); "
                          "tree_terminal = dense-root KR-UCT to mcts_max_depth + terminal-rollout leaves (az_v11); "
-                         "screen_tree = noise-robust flat screen -> depth-2 tree over survivors (az_v12)")
+                         "screen_tree = noise-robust flat screen -> depth-2 tree over survivors (az_v12); "
+                         "stt = searched+truncated rollout estimator screen (EXP-056/058; needs --value-world)")
     args = ap.parse_args()
 
     import torch
@@ -367,7 +428,7 @@ def main():
     collect_reward = bool(getattr(cfg.search, "collect_step_reward", False))
 
     recs: List[Dict[str, np.ndarray]] = []
-    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree") else None
+    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt") else None
     n_games = 0
     for i, root in enumerate(roots):
         g = play_game(root, policy, amean_t, astd_t, amean_np, astd_np,
