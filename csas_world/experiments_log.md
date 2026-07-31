@@ -1621,3 +1621,17 @@ The manual OLD-rules regression draw (WORLD_BOUNDARY_REMOVAL=0, adaptation-cost 
 is running; its aggregate will be appended below.
 
 **OLD-rules regression draw (manual, WORLD_BOUNDARY_REMOVAL=0):** winrate 0.4935, dScore +0.0072 ± 0.0284/end (n=2790) — no adaptation cost detectable; the new-rules fine-tune did not damage old-rules play.
+
+**EXP-057 k=8 aggregates (auto-appended):**
+
+- m1_v14d_v9_old: k=8 winrate 0.5256, dScore +0.1910 ± 0.0293/end (n=2790)  [certified k=2: +0.102 ± 0.005 (k=2, 3 draws)]
+- m2_v19_v14d_new: k=8 winrate 0.4989, dScore -0.0197 ± 0.0272/end (n=2790)  [certified k=2: +0.001 ± 0.012 (k=2, 3 draws)]
+
+**VERDICT (2026-07-31): PROTOCOL VALIDATED.** M1's ranking holds at k=8 with the edge
+nearly DOUBLED (+0.102 -> +0.191/end, >6σ positive) — the dilution prediction confirmed:
+k=2 gate numbers are conservative understatements of deployed strength. M2 stays at parity
+(−0.020 ± 0.027) — the EXP-052 null is robust across protocols, not a dilution artifact.
+Consequences: (1) both pre-registered pass conditions met; the canonical k=2 gate protocol
+and every historical ranking stand; (2) the arena's k=8 deployment of az_v14d is now itself
+certified (its true edge over the previous champion at deployment settings is ~+0.19/end);
+(3) promotions henceforth include one k=8 confirmation draw (policy adopted above).
