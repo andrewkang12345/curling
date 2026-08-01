@@ -1704,3 +1704,26 @@ mean sig rate — note: LOWER than screen_tree's ~8.5%, the StT estimator's CRN-
 gate more conservatively). Fixed: proper split rebuilt (34 train / 5 val shards), retrain
 with the full exp_052 selection machinery, fresh k=4 gate draw (vsctrl_k4_v2). Corrected
 result to be appended below.
+
+**CORRECTED RESULT + VERDICT (2026-08-01): PARITY — one-generation self-consistent StT
+adds nothing detectable.** With valid selection (best @ epoch 10, guard active):
+az_v20_stt vs az_v19 control at k=4: winrate 0.5050, dScore **+0.018 ± 0.034/end**
+(n=2,516). |ds| << the shortened gate's 2·SE bar -> the full battery does not fire.
+Combined with EXP-056b: the StT estimator is now null BOTH as a drop-in chooser AND after
+one generation of self-consistent retraining on its own targets.
+
+Standing caveats (pre-registered): one-generation bound only (proposal support reshapes
+gradually); the StT corpus carried ~5.2% sig plies vs the control's ~8.5% (CRN-marginal
+gating is more conservative — fewer teaching signals at equal games); the shortened gate
+resolves only |ds| >~ 0.07. A multi-generation StT loop or a sig-rate-equalised corpus
+could still differ, but nothing in five experiments (053-058) suggests the effect size
+would justify the cost.
+
+**PROGRAM CLOSURE (search/target operators, EXP-053 -> EXP-058).** Neither deeper trees,
+nor budget, nor the Sage-3T rollout estimator — as chooser or as teacher — moves this
+system at its current data scale. The certified stack stands: exp_037 screen_tree targets,
+1-ply-robust deployed selection (k=2 gate / k=8 deploy), az_v14d champion. Remaining
+strength levers, in order of evidence: (1) DATA SCALE (the interrupted 9x significant-ply
+test — az_v17 old-rules 1,904 games banked; new-rules az_v19 672 + az_v20 624 corpora
+reusable for mixed-target experiments); (2) architecture at larger data; (3) latent-space
+search, gated on dynamics-head fidelity.
