@@ -1634,6 +1634,29 @@ ONE generation only — the policy only partially reshapes toward StT support in
 pre-registered caveat); az_v20 < az_v19 => StT targets are WORSE to learn from at this
 noise level. Cost: ~16-20h collection (StT is ~60% of screen_tree's per-ply cost), ~3h
 train, ~10h evals.
+---
+
+## EXP-059 / az_v21 — 2x DATA SCALE FOR THE StT TEACHER — IN FLIGHT 2026-08-01
+
+**Question (user).** Is StT-as-teacher truly useless, or was the 1x parity signal
+starvation? Doubling the StT corpus does double duty: (a) measures the StT family's
+data-scale response, and (b) at ~1,250 games the StT corpus's significant-ply count
+(~650 at its 5.2% rate) finally MATCHES the az_v19 control's (~570 at 8.5%), removing the
+fewer-teaching-signals confound flagged in EXP-058.
+
+**Design** (`scripts/_exp059_stt2x_loop.sh`). Continue the az_v20_stt corpus to ~1,250
+games (3 workers — the certified GPU ceiling for value-model-resident StT workers, with
+shards-on-disk verification per round); retrain az_v21_stt2x from az_v14d with the identical
+recipe; shortened k=4 N=250 gates (per the EXP-058 amendment): PRIMARY vs az_v19 control,
+SECONDARY vs az_v20_stt (within-family scale response).
+
+**Pre-registered outcomes.** (1) az_v21 ≈ az_v19 AND ≈ az_v20: StT flat in data — the
+teacher is genuinely inert at this resolution; closure stands reinforced. (2) az_v21 >
+az_v19 by >2·SE: StT responds to scale — conditional follow-up REQUIRED before any
+promotion claim: a 2x screen-target control (~600 more screen games) to separate
+estimand-vs-data effects. (3) az_v21 > az_v20 but ≈ az_v19: pure data-scale effect, teacher
+identity irrelevant — redirects effort to the generic 9x data test. Cost: ~20h collection +
+~3h train + ~4h gates.
 
 
 ## Template for a new entry
