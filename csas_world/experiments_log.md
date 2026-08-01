@@ -1689,3 +1689,18 @@ Consequences: (1) both pre-registered pass conditions met; the canonical k=2 gat
 and every historical ranking stand; (2) the arena's k=8 deployment of az_v14d is now itself
 certified (its true edge over the previous champion at deployment settings is ~+0.19/end);
 (3) promotions henceforth include one k=8 confirmation draw (policy adopted above).
+
+**EXP-058 raw eval aggregates (auto-appended):**
+
+- vsctrl_k4: winrate 0.4968, dScore -0.0258 ± 0.0383/end (n=2516)
+
+**INCIDENT + rerun (2026-08-01).** The first train/gate above is INVALID by our own
+standards: collection workers 3-4 OOM'd every round (the 3-per-GPU StT-worker ceiling —
+each carries the value-world model — plus the resident arena), so the val split (keyed to
+shard 4) was EMPTY, training ran without validation ("best at epoch none": no early-stop
+selection, no value-drift guard — the az_v13 misaligned-selection failure mode), and the
+gate evaluated the raw last epoch. The 624-game corpus itself is intact (39 shards, 5.2%
+mean sig rate — note: LOWER than screen_tree's ~8.5%, the StT estimator's CRN-marginal SEs
+gate more conservatively). Fixed: proper split rebuilt (34 train / 5 val shards), retrain
+with the full exp_052 selection machinery, fresh k=4 gate draw (vsctrl_k4_v2). Corrected
+result to be appended below.
