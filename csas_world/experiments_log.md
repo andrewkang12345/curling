@@ -1750,3 +1750,20 @@ strength levers, in order of evidence: (1) DATA SCALE (the interrupted 9x signif
 test — az_v17 old-rules 1,904 games banked; new-rules az_v19 672 + az_v20 624 corpora
 reusable for mixed-target experiments); (2) architecture at larger data; (3) latent-space
 search, gated on dynamics-head fidelity.
+
+**EXP-059 raw eval aggregates (auto-appended):**
+
+- vs19ctrl_k4: winrate 0.5004, dScore +0.0322 ± 0.0364/end (n=2516)
+- vs20stt1x_k4: winrate 0.5127, dScore +0.0060 ± 0.0412/end (n=2516)
+
+**VERDICT (2026-08-02): OUTCOME 1 — StT-as-teacher is flat in data scale; inert confirmed.**
+The 2x corpus (1,296 games / 12,960 records / 697 sig plies at 5.4% — now EXCEEDING the
+control's ~570 sig plies, confound removed) trained cleanly (best @ epoch 12, guard active),
+and az_v21 sits at parity with BOTH the az_v19 screen control (+0.032 ± 0.036/end) and the
+1x StT arm (+0.006 ± 0.041/end). No scale response within the StT family, no catch-up
+against the screen control once teaching signals are matched. Per the pre-registered map:
+the teacher identity is irrelevant at this resolution — the EXP-053→058 closure stands
+REINFORCED, and the data-scale question decouples from the operator question entirely.
+The generic data lever (the 9x significant-ply test) is now the sole ranked-first open
+direction; the combined new-rules corpora (az_v19 672 + az_v20/21 1,296 games ≈ 2,000
+games, ~1,270 sig plies across both estimands) are banked toward it.
