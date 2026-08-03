@@ -1676,6 +1676,30 @@ sound by construction, then normal collection at reduced horizon) + COVERAGE CON
 (stratify by state descriptor: stones in play, house occupancy, guard count, canonicalized
 symmetry; sample prefixes to fill under-covered buckets).
 
+**VERDICT (906 plies, 2026-08-03): AT THE FIXED POINT — excess disagreement ≈ 0.**
+On sig-gated plies: teacher-vs-student material disagreement 98.6%, student-vs-student
+baseline 99.2% -> **EXCESS −0.6%** (non-sig: +0.5%; every horizon within ±3%). The
+teacher's choice is statistically indistinguishable from another draw of the student
+itself. Pre-registered reading: the policy IS its teacher's fixed point -> **the 9x
+same-operator fine-tune is predicted parity with high confidence; do not spend the week.**
+
+**Bonus discovery (explains EXP-053-059 coherently):** deployed selection SELF-disagrees
+at the action level ~99% of the time (dn>2.5 across independent draws) — the decision
+landscape at collection states is a PLATEAU of near-equivalued shots, and every chooser
+(teacher, student, StT, d3...) is a lottery over the same plateau. That is why all operator
+pairs "disagreed" on ~99% of plies while all adjudicated value gaps were <=0.05/end: the
+action-level comparisons were lotteries; plateau HEIGHT is the only real quantity, and
+everything sits on the same plateau on-distribution.
+
+**Implication + next diagnostic.** Distillation gradients vanish on-distribution at any
+data scale (targets ~ the policy's own draw distribution). The live question for the
+diverse-openings lever: does teachable headroom exist OFF-distribution? Follow-up
+(headroom map): generate hot-prefix states (the (ii) mechanism), and measure the VALUE GAP
+E[Q(teacher choice) − Q(student choice)] by paired MC per state — the saturated
+disagreement metric is uninformative there; the value gap is the distillable signal. If
+the gap is ~0 there too, the loop is closed at this noise level and (iv) full-training /
+value-channel (iii) are the only remaining levers.
+
 
 ## Template for a new entry
 
