@@ -1657,6 +1657,24 @@ promotion claim: a 2x screen-target control (~600 more screen games) to separate
 estimand-vs-data effects. (3) az_v21 > az_v20 but ≈ az_v19: pure data-scale effect, teacher
 identity irrelevant — redirects effort to the generic 9x data test. Cost: ~20h collection +
 ~3h train + ~4h gates.
+---
+
+## EXP-060 — FIXED-POINT DIAGNOSTIC (is there anything left to distill?) — IN FLIGHT 2026-08-03
+
+Per stored az_v19 collection record (x0, c0, teacher's top-weighted dist action), compute the
+champion's own deployed selection (WorldPlayer k=8) twice with independent seeds. Report
+teacher-vs-student material-disagreement rate (dn>2.5) MINUS the student-vs-student baseline
+(stochastic selection among near-ties), stratified sig-gated vs non-sig and by horizon.
+Pre-registered reading: excess disagreement on sig plies <~15-20% => policy is at its
+teacher's fixed point; the 9x same-operator fine-tune is predictably parity. >~40% => real
+distillation headroom; 9x justified. All ~570 sig plies + 400 sampled non-sig; ~1h, 4 shards.
+
+**Design note for the diverse-openings program (user, 2026-08-03):** NO jittered
+pre-placements. Mechanism = HIGH-TEMPERATURE PREFIXES (2-4 burn-in throws from canonical
+roots by a hot policy / human prior / arena-match prefixes, under execution noise — states
+sound by construction, then normal collection at reduced horizon) + COVERAGE CONTROL
+(stratify by state descriptor: stones in play, house occupancy, guard count, canonicalized
+symmetry; sample prefixes to fill under-covered buckets).
 
 
 ## Template for a new entry
