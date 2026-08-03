@@ -1699,6 +1699,45 @@ E[Q(teacher choice) − Q(student choice)] by paired MC per state — the satura
 disagreement metric is uninformative there; the value gap is the distillable signal. If
 the gap is ~0 there too, the loop is closed at this noise level and (iv) full-training /
 value-channel (iii) are the only remaining levers.
+---
+
+## EXP-061 — HEADROOM MAP RESULT: THE TEACHER IS BEHIND THE STUDENT — 2026-08-03
+
+Δ = Q(teacher screen_tree choice) − Q(student deployed-selection choice), paired terminal-MC
+k=64 CRN, 480 states:
+- CONTROL (on-distribution sig plies): **Δ = −0.266 ± 0.056/end (t=−4.7)**
+- HOT-PREFIX (off-distribution):       **Δ = −0.126 ± 0.027/end (t=−4.7)** (negative at every
+  prefix length; most negative in guard-heavy strata: guard=2/3 buckets −0.17..−0.31)
+
+**Reading.** The deployed selection (policy proposals + value-head ranking + k=8 noise
+robustness) now picks BETTER shots than the collection operator that trains it. Mechanism:
+the teacher argmaxes ~200 candidates on 8-sample terminal-MC estimates (SE ~±0.25) — a
+WINNER'S-CURSE selection whose chosen action regresses under the 64-sample re-measure —
+while the student ranks with a low-variance value head and carries no such curse. On the
+decision plateau (EXP-060), the low-variance ranker wins. Caveat: the adjudicator shares
+the teacher's estimand (raw-policy terminal MC), which if anything should FAVOR the
+teacher — making the negative sign conservative. Part of the magnitude is measurement
+mechanics (curse regression), but the curse applies to the actual TARGETS too: collection
+distills noise-selected actions.
+
+**Consequences.**
+1. The distillation loop as constituted is not just saturated (EXP-060) — its improvement
+   operator is INVERTED. Sig-gating + replay mixes + guards explain why recent fine-tunes
+   were parity rather than negative: they limited the damage.
+2. The diverse-openings bet dies FOR THIS TEACHER: off-distribution Δ is also negative.
+   It may return with a stronger teacher.
+3. Teacher quality is worst exactly in guard-heavy/congested states — compounding the
+   defensive-teaching starvation (EXP-060 horizon table).
+4. NEW LEVER exposed — **big-budget self-distillation**: the strongest affordable operator
+   is now the student's OWN decision rule at a larger budget (more candidates x more noise
+   samples, value-head ranked — EXP-057 measured k=8 >> k=2 at play). A teacher =
+   deployed-selection@(96-192 cands x k=32-64) has no MC winner's curse (shared value-head
+   bias cancels teacher/student) and distills the measured k-scaling gain into 48x8 play.
+   This is the AZ loop with the search replaced by the certified robust-selection operator.
+
+**Falsifiable next step (proposed):** verify a big-budget teacher actually beats the
+student per-decision (same paired-MC + playout harness, teacher = k=64/192-cand selection);
+if yes, one collection+retrain cycle with those targets.
 
 
 ## Template for a new entry
