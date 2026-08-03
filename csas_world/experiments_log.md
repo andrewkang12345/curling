@@ -1738,6 +1738,26 @@ distills noise-selected actions.
 **Falsifiable next step (proposed):** verify a big-budget teacher actually beats the
 student per-decision (same paired-MC + playout harness, teacher = k=64/192-cand selection);
 if yes, one collection+retrain cycle with those targets.
+---
+
+## EXP-062 — BIG-BUDGET SELF-DISTILLATION TEACHER VERIFICATION — IN FLIGHT 2026-08-04
+
+**Question.** EXP-061 inverted the loop: the MC-argmax teacher is BEHIND the student
+(winner's curse). Candidate replacement teacher = the student's OWN deployed decision rule
+at a larger budget (value-head ranked, no MC curse; shared value bias cancels in the
+contrast). EXP-057 already showed budget scaling of this rule buys real play strength
+(k=2 -> k=8). Verify per-decision superiority BEFORE any collection cycle.
+
+**Design** (`scripts/exp062_bigbudget_teacher.py`; EXP-061's state distribution: 80
+on-distribution sig plies + 160 hot-prefix states). Per state: S = 48x8 deployed selection;
+S' = independent second draw (null anchor, Δ ≈ 0 expected); T1 = 96x32 (~8x); T2 = 192x64
+(~32x). Δ(X−S) by paired terminal-MC k=64 CRN (fair here: neither side optimizes the MC
+estimand); guided playouts T=16 on every 4th state for T2−S confirmation.
+
+**Pre-registered.** Teacher certified iff Δ(T1−S) > 0 and Δ(T2−S) >= Δ(T1−S) (dose-response)
+with the playout confirm agreeing in sign, and Δ(S'−S) ≈ 0 (anchor sanity). If certified ->
+one collection+retrain cycle with big-budget-selection targets (sig-gating via paired value
+margins), the first loop restart supported by every diagnostic.
 
 
 ## Template for a new entry
