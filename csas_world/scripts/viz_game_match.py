@@ -139,8 +139,8 @@ def render(shots, persp, score_a, args):
             xs += list(s["traj"][:, 0]); ys += list(s["traj"][:, 1])
     # button-magnified view: clip the auto extent to a house-centred window so the
     # long approach path doesn't zoom the sheet out; guards (plot y ~ +3.4) stay visible
-    xlim = (max(min(xs) - 0.25, -2.55), min(max(xs) + 0.25, 2.55))
-    ylim = (max(min(ys) - 0.25, -2.45), min(max(ys) + 0.25, 3.85))
+    xlim = (max(min(xs) - 0.25, -2.85), min(max(xs) + 0.25, 2.85))
+    ylim = (max(min(ys) - 0.25, -3.0), min(max(ys) + 0.25, 4.2))
     n_throws = max(s["k"] for s in shots)
     setup = (f"selection={'noisy-robust x%d' % args.sel_noise_samples if args.noisy_select else 'deterministic'}"
              f"   execution={'NOISY (winrate)' if args.realize_noise else 'deterministic'}")
@@ -157,7 +157,7 @@ def render(shots, persp, score_a, args):
             is_thrown = (slot == s["thrown_slot"])
             ax.add_patch(Circle((xy[slot, 0], xy[slot, 1]), STONE_RADIUS_M, facecolor=fc,
                                 edgecolor=THROWN_EDGE if is_thrown else "0.15",
-                                lw=1.7 if is_thrown else 1.0, zorder=4 if is_thrown else 3))
+                                lw=2.1 if is_thrown else 1.0, zorder=4 if is_thrown else 3))
         if s["traj"] is not None and len(s["traj"]):
             tc = A_COLOR if s["thrower"] == args.label_a else B_COLOR
             ax.plot(s["traj"][:, 0], s["traj"][:, 1], linestyle=":", color=tc, lw=2.0, alpha=0.95, zorder=2)
