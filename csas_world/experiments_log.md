@@ -1759,6 +1759,42 @@ with the playout confirm agreeing in sign, and Δ(S'−S) ≈ 0 (anchor sanity).
 one collection+retrain cycle with big-budget-selection targets (sig-gating via paired value
 margins), the first loop restart supported by every diagnostic.
 
+**VERDICT (240 states, 2026-08-04): CERTIFIED.** Monotone dose-response with a clean null
+anchor: Δ(S'−S) = +0.019 ± 0.025 (anchor ≈ 0 ✓); Δ(T1−S) = +0.035 ± 0.026 (> 0 ✓);
+**Δ(T2−S) = +0.062 ± 0.027 (t=+2.28)** (>= T1 ✓); playout confirm Δ(T2−S) = **+0.110 ±
+0.068** (sign agrees ✓). Unlike the EXP-053/056 near-signals, this one has structure
+(3-level monotone ladder + null anchor), an independent game-level confirmation (EXP-057:
+budget scaling of this exact rule, >6σ at n=2,790 ends), and a understood mechanism
+(variance reduction of the argmax over the plateau; no winner's curse — value bias shared).
+Anchor-corrected per-decision edge ≈ +0.04-0.09/end. Proceeding to the pre-registered
+cycle: EXP-063 below.
+---
+
+## EXP-063 / az_v22 — BIG-BUDGET SELF-DISTILLATION CYCLE — IN FLIGHT 2026-08-04
+
+**The pre-registered consequence of EXP-062's certification.** Teacher = the certified T2
+operator (192 policy proposals x k=64 CRN noisy executions, value-head ranked — the
+deployed selection at ~32x budget; per-decision edge +0.06/end MC, +0.11 playout-confirmed).
+New selfplay scorer `bigsel` replicates the deployed `_decision_values` semantics exactly
+(proposal temp 1.1/std 1.2, mean -V(post) over noise realizations, illegal-if-any masking),
+distill targets = soft-topk over the robust values, sig-gate = top-1-vs-top-2 t>=2 on the
+value-sample SEs (CRN-conservative). Smoke: 1 game -> 10 records ok.
+
+**Plan** (`scripts/_exp063_bigsel_loop.sh`): ~400 games (3 workers — value-eval-heavy),
+target dir az_v22_bigsel; fine-tune az_v14d with the exp_052 recipe; SHORTENED GATE (per
+the standing amendment): one k=4 N=250 draw **vs the incumbent az_v14d itself** — the real
+question is finally "does the loop beat the champion again". Full 3-draw battery + k=8
+confirmation only if |ds| > 2·SE. Expected timeline: ~1.5-2 days collection + 3h train +
+2h gate.
+
+**Why this can work where everything since az_v14d failed:** the teacher is (a) certified
+STRONGER than the student per-decision (unlike screen_tree, which EXP-061 showed is
+weaker), (b) curse-free (value-ranked, not MC-argmax), (c) cheap enough per-ply to gate
+generously, and (d) its gains concentrate exactly where EXP-057 showed budget matters.
+Risk (pre-registered): self-distillation of a value-ranked teacher can only teach the
+policy to propose what the value head already prefers — if the value head is the binding
+constraint, the cycle returns parity and the (iii) value-rank lever becomes the priority.
+
 
 ## Template for a new entry
 

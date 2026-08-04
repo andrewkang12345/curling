@@ -1,0 +1,60 @@
+# EXP-063 collection: BIGSEL self-distillation targets (EXP-062-certified T2 teacher:
+# 192 policy proposals x k=64 CRN noisy executions, value-head ranked). Same sig gating.
+# Clone of exp_037 (same dense pool, sig gating, noise); scorer=stt via CLI; stt knobs
+# (n_search 6, k_ego 4, trunc 4) are SearchCfg defaults certified in EXP-056.
+# SIGNIFICANCE GATING of the distillation targets (dist_sig_t). A ply's dist_mask is
+# set only if the screen's top-1 vs top-2 Q-gap passes t >= 2 (pooled MC t-test),
+# with a batched tie-break round (16 extra realisations per top-2 candidate) in the
+# 0.8 <= t < 2 band. Only statistically-real preferences are distilled; every ply
+# still contributes grounded value/consistency/reward targets.
+#
+# Fixes az_v11's fatal flaw (only ~2 execution-noise realisations per candidate — a
+# regression against the project's oldest lesson, EXP-013's "average every candidate
+# over 8 noisy executions"):
+#   * STAGE 1 (batched, uniform precision): dense proposal (~48: 24 policy + 8
+#     structured + 8 grid + 4 local + 4 uniform) screened by the flat terminal-MC
+#     operator at k_ego = noise_samples = 8 noisy executions per candidate.
+#   * STAGE 2 (adaptive): KR-UCT depth-2 tree with terminal-rollout leaves over ONLY
+#     the top screen_topk=8 survivors; mcts_sims=48 gives each finalist ~6 fresh-noise
+#     visits, allocated by visit counts + kernel-effective exploration.
+# Executed action + distillation target come from stage-2 Q. Value-model-FREE end to
+# end. Sequential-halving-with-a-tree — the Gumbel-AZ shape adapted to execution noise.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 24
+  structured_candidates: 8
+  diverse_candidates: 8
+  local_candidates: 4
+  global_candidates: 4
+  soft_topk: 24
+  noise_samples: 8                  # STAGE-1 k_ego: 8 noisy executions per dense candidate
+  rollout_greedy_steps: 5
+  use_mcts_tree: false              # (scorer branch drives both stages directly)
+  terminal_rollout_scoring: true    # stage 1 = flat terminal-MC screen
+  screen_topk: 8                    # survivors into stage 2
+  dist_sig_t: 2.0                   # distill only if top-1 vs top-2 gap has t >= 2

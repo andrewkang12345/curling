@@ -161,6 +161,11 @@ class SearchCfg:
     mcts_max_depth: int = 0          # 0 = horizon-bound tree (default); 2 = the 2-ply training-time
                                      # operator (root expand → child eval via leaf fn, no grandchildren).
                                      # Use with use_mcts_tree=true + value_leaf_bootstrap=true.
+    # EXP-063 "bigsel" scorer (big-budget self-distillation teacher, EXP-062 T2):
+    bigsel_candidates: int = 192     # policy proposals (deployed-selection family)
+    bigsel_k: int = 64               # noise realizations per candidate (CRN)
+    bigsel_temp: float = 1.1         # deployed-selection proposal temperature
+    bigsel_std: float = 1.2
     # EXP-058 "stt" scorer (searched + truncated rollout estimator, EXP-056 cell):
     stt_n_search: int = 6            # value-greedy candidates per in-rollout step
     stt_k_ego: int = 4               # noisy executions per root candidate (CRN)

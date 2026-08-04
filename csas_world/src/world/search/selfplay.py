@@ -110,6 +110,56 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 lp = legal[:n_pol]
                 if legal.any() and lp.any():
                     diag.append((int(hh), float(q[legal].max() - q[:n_pol][lp].max())))
+        elif scorer == "bigsel":
+            # EXP-063: teacher = the deployed selection at big budget (EXP-062 T2):
+            # pure policy proposals, k noisy executions each (CRN), value-head ranked.
+            # Requires value_model (--value-world = incumbent value head).
+            n_c = int(getattr(cfg, "bigsel_candidates", 192))
+            ke = int(getattr(cfg, "bigsel_k", 64))
+            cands = np.asarray(_sample_actions(policy, amean_t, astd_t, st, cc, n_c, device,
+                                               float(getattr(cfg, "bigsel_temp", 1.1)),
+                                               float(getattr(cfg, "bigsel_std", 1.2)), 0.0), np.float32)
+            noisy = noise.sample_batch(cands, ke, crn=True).reshape(-1, 4)
+            posts_all, ill_all = env_bridge.apply_legality(
+                st, env_bridge.simulate(st, cc, noisy), hh, cc)
+            if hh <= 1:
+                qf = np.array([env_bridge.score_end(pp, int(round(cc[2]))) for pp in posts_all],
+                              dtype=np.float64)
+            else:
+                nc2 = env_bridge.next_condition(cc, sie)
+                qf = -env_bridge.evaluate_value(value_model, posts_all, nc2, device).astype(np.float64)
+            q2 = qf.reshape(n_c, ke)
+            q = q2.mean(axis=1)
+            q_se = q2.std(axis=1, ddof=1) / np.sqrt(ke)
+            q = env_bridge.mask_illegal_scores(q, ill_all.reshape(n_c, ke).any(axis=1))
+            legal = q > -1e8
+            if not legal.any():
+                return None
+            top_idx, weights = env_bridge.soft_topk(q, min(M, int(legal.sum())),
+                                                    cfg.policy_temperature)
+            order = np.argsort(np.where(legal, q, -1e18))[::-1]
+            conf = 1.0
+            sig_t = float(getattr(cfg, "dist_sig_t", 0.0) or 0.0)
+            if sig_t > 0.0 and int(legal.sum()) >= 2:
+                a_i, b_i = int(order[0]), int(order[1])
+                gap = float(q[a_i] - q[b_i])
+                se = float(np.sqrt(q_se[a_i] ** 2 + q_se[b_i] ** 2))
+                conf = 1.0 if (se > 0 and gap / se >= sig_t) else 0.0
+            if diag is not None:
+                diag.append((int(hh), float(conf)))
+            dists.append((cands[top_idx].copy(), weights.copy(), conf))
+            a = np.asarray(cands[int(order[0])], np.float32)
+            if noise is not None:
+                a = noise.sample_batch(a[None], 1).reshape(4).astype(np.float32)
+            post, _ = env_bridge.apply_legality(st, env_bridge.simulate_one(st, cc, a)[None], hh, cc)
+            acts_exec.append(a.copy())
+            st = post[0]
+            cc = env_bridge.next_condition(cc, sie)
+            hh -= 1
+            states.append(st.copy())
+            conds.append(cc.copy())
+            persps.append(int(round(cc[2])))
+            continue
         elif scorer == "stt":
             # EXP-058: flat screen scored by the searched+truncated estimator (EXP-056 StT
             # cell): value-greedy in-rollout steps (n_search) + champion-V leaf at trunc.
@@ -372,7 +422,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=1)
     ap.add_argument("--shard-id", type=int, default=0)
-    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt"], default="tree",
+    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel"], default="tree",
                     help="tree = 2-ply KR-UCT with value-head leaves (az_v9); "
                          "terminal = value-free dense-candidate MC-to-terminal operator (az_v10); "
                          "tree_terminal = dense-root KR-UCT to mcts_max_depth + terminal-rollout leaves (az_v11); "
@@ -428,7 +478,7 @@ def main():
     collect_reward = bool(getattr(cfg.search, "collect_step_reward", False))
 
     recs: List[Dict[str, np.ndarray]] = []
-    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt") else None
+    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel") else None
     n_games = 0
     for i, root in enumerate(roots):
         g = play_game(root, policy, amean_t, astd_t, amean_np, astd_np,
