@@ -39,9 +39,12 @@ while true; do
   if [ ! -f "$OUT/r${R}_shard0.npz" ]; then
     pids=()
     for k in $(seq 0 $((N-1))); do
-      [ "$k" -gt 0 ] && sleep 90
-      unset LD_LIBRARY_PATH
-      env $ENVV timeout 21600 python3 -m world.search.selfplay \
+      [ "$k" -gt 0 ] && sleep 60
+      # GPU-SIM workers (2026-08-05): JAX on cuda via the sourced setup_gpu env
+      # (LD_LIBRARY_PATH preserved), small XLA fraction so 2 workers + torch + arena fit.
+      env $ENVV JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false \
+        XLA_PYTHON_CLIENT_MEM_FRACTION=0.15 VALUE_EVAL_BATCH=128 \
+        timeout 21600 python3 -m world.search.selfplay \
         --config configs/exp_065_br_targets.yaml \
         --games "$G" --num-shards "$N" --shard-id "$k" --split train \
         --seed $((650000 + round*100 + k)) --scorer bigsel \
@@ -64,10 +67,9 @@ done
 
 T=artifacts/replay/az_v25_train; V=artifacts/replay/az_v25_val
 rm -rf "$T" "$V"; mkdir -p "$T" "$V"
-LASTK=$((N-1))
 for f in "$OUT"/r*_shard*.npz; do
-  b=$(basename "$f"); k=${b##*shard}; k=${k%.npz}
-  if [ "$k" = "$LASTK" ]; then ln -s "$(readlink -f "$f")" "$V/$b"; else ln -s "$(readlink -f "$f")" "$T/$b"; fi
+  b=$(basename "$f"); r=${b#r}; r=${r%%_*}; k=${b##*shard}; k=${k%.npz}
+  if [ "$k" = "0" ] && [ $((10#$r % 3)) -eq 1 ]; then ln -s "$(readlink -f "$f")" "$V/$b"; else ln -s "$(readlink -f "$f")" "$T/$b"; fi
 done
 echo "[exp065] split: $(ls $T | wc -l) train / $(ls $V | wc -l) val shards" | tee -a "$LOG"
 
