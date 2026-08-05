@@ -43,7 +43,8 @@ while true; do
       # GPU-SIM workers (2026-08-05): JAX on cuda via the sourced setup_gpu env
       # (LD_LIBRARY_PATH preserved), small XLA fraction so 2 workers + torch + arena fit.
       env $ENVV JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false \
-        XLA_PYTHON_CLIENT_MEM_FRACTION=0.15 VALUE_EVAL_BATCH=128 \
+        CUDA_VISIBLE_DEVICES=$((k % 3 + 1)) \
+        XLA_PYTHON_CLIENT_MEM_FRACTION=0.30 VALUE_EVAL_BATCH=256 \
         timeout 21600 python3 -m world.search.selfplay \
         --config configs/exp_065_br_targets.yaml \
         --games "$G" --num-shards "$N" --shard-id "$k" --split train \
@@ -92,7 +93,7 @@ run_eval() {  # outdir, opponent, extra flags...
   [ -f "$O/summary.json" ] && return 0
   mkdir -p "$O"; unset LD_LIBRARY_PATH
   env $ENVV python3 scripts/_eval_parallel.py --champion "$CK" --vs "$OPP" \
-    --N 250 --horizons 1,2,3,4,5,6,7,8,9,10 --gpus 0,0,0,0 --shards 4 --noisy "$@" \
+    --N 250 --horizons 1,2,3,4,5,6,7,8,9,10 --gpus 0,1,2,3 --shards 4 --noisy "$@" \
     --out-dir "$O" >> "$WORK/eval.log" 2>&1
   echo "[exp065] eval $1 done $(date -u +%H:%M)" | tee -a "$LOG"
 }

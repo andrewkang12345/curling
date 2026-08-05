@@ -18,22 +18,23 @@ export VALUE_EVAL_BATCH=128 POLICY_BATCH_CAP=96 PYTORCH_CUDA_ALLOC_CONF=expandab
 echo "[exp066] states done" | tee -a "$LOG"
 
 pids=()
-for k in 0 1; do
-  JAX_PLATFORMS=cuda python3 scripts/exp066_search_validation.py --phase ref \
-    --shard-id $k --num-shards 2 --out-dir "$OUT" >> "$OUT/ref_shard$k.log" 2>&1 &
+for k in 0 1 2 3; do
+  CUDA_VISIBLE_DEVICES=$k JAX_PLATFORMS=cuda python3 scripts/exp066_search_validation.py --phase ref \
+    --shard-id $k --num-shards 4 --out-dir "$OUT" >> "$OUT/ref_shard$k.log" 2>&1 &
   pids+=($!); sleep 30
 done
 wait "${pids[@]}" || true
 echo "[exp066] ref done" | tee -a "$LOG"
 
-JAX_PLATFORMS=cuda python3 scripts/exp066_search_validation.py --phase flat \
+CUDA_VISIBLE_DEVICES=1 JAX_PLATFORMS=cuda python3 scripts/exp066_search_validation.py --phase flat \
   --shard-id 0 --num-shards 1 --out-dir "$OUT" >> "$OUT/flat.log" 2>&1
 echo "[exp066] flat done" | tee -a "$LOG"
 
 pids=()
-for k in 0 1 2 3; do
-  env -u LD_LIBRARY_PATH JAX_PLATFORMS=cpu python3 scripts/exp066_search_validation.py \
-    --phase tree --shard-id $k --num-shards 4 --out-dir "$OUT" \
+for k in 0 1 2 3 4 5 6 7; do
+  env -u LD_LIBRARY_PATH JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES=$((k % 4)) \
+    python3 scripts/exp066_search_validation.py \
+    --phase tree --shard-id $k --num-shards 8 --out-dir "$OUT" \
     >> "$OUT/tree_shard$k.log" 2>&1 &
   pids+=($!); sleep 20
 done
