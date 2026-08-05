@@ -1845,6 +1845,38 @@ conclusively unnecessary, and the noise-ceiling reading gets its strongest evide
 population-limited; a population/BR loop becomes the live path (a working BR operator IS
 the "teacher that stays ahead"). Either outcome is decisive. Caveat: one BR generation
 from a champion warm start bounds one iteration of exploitation, not the BR-loop limit.
+---
+
+## EXP-066 — SEARCH-VALIDATION BENCHMARK (simple-regret scaling curve) — QUEUED 2026-08-05
+
+**Question (user's verdict, accepted).** EXP-053-055/061 refuted OUR budget-constrained,
+statically-branched, chance-node-free trees — not correctly-implemented stochastic search.
+Code audit CONFIRMS the structural defect: kr_uct_tree commits ONE fresh noise realization
+per visit (no explicit chance/afterstate nodes; min/max mixes with execution randomness;
+~2-6 effective samples per candidate at historical budgets). Before any search conclusions
+stand, an instrumented benchmark must show whether a correctly-structured tree's SIMPLE
+REGRET decreases monotonically with budget.
+
+**Design** (`scripts/exp066_search_validation.py` + `src/world/search/hybrid_tree.py`).
+60 h=2 states (40 tactical: >=4 live or >=2 in-house, hot-prefix generated; 20 control),
+one SHARED 128-candidate pool per state (96 policy + 32 structured; all arms choose from
+the pool). REFERENCE: two-stage chance-correct expectimax (A: 128 cands x 32 root-CRN x
+[48 opp x 8]; B: top-16 at 128 x [64 x 16]) — GPU-JAX (the new 29k throws/s unlock makes
+this ~1-2 min/state). ARMS at budgets {1k, 4k, 16k, 64k} simulator calls:
+flat_width (bigsel family), screen_tree (budget-scaled operator of record), and
+hybrid_tree — NEW module implementing the full spec: explicit decision/chance nodes
+(min/max only at decisions), double progressive widening (actions AND outcomes),
+min-evidence gate (>=8 effective samples on serious candidates before opening more),
+policy-prior PUCT bonus over kernel-regressed stats (bandwidth in execution-noise units),
+mixed V+periodic-rollout leaves, anytime budget checkpoints from one 64k run.
+
+**Pre-registered readouts.** (1) Monotone regret decrease per arm = implementation sound;
+non-monotone = fix search before concluding anything about the game. (2) If all arms'
+64k regret ~ reference noise floor (esp. on TACTICAL strata) => the plateau/ceiling
+conclusion stands at the level of the game, closing the search question permanently.
+(3) hybrid_tree regret << flat_width at equal budget on tactical states => a correctly
+funded stochastic tree DOES add value; its targets become candidates for training
+(gated: only after monotonicity holds). Chained behind EXP-065 (`_exp066_chain.sh`).
 
 
 ## Template for a new entry
