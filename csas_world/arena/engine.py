@@ -546,7 +546,9 @@ def build_replay(m: "Match") -> Dict[str, Any]:
     + display trajectories re-run from the realized params. Cached on disk for
     finished matches."""
     import json as _json
-    cache = MATCH_DIR / f"{m.id}.replay.json"
+    cache_dir = MATCH_DIR / "replays"
+    cache_dir.mkdir(exist_ok=True)
+    cache = cache_dir / f"{m.id}.json"
     if m.data["status"] != "in_progress" and cache.exists():
         return _json.loads(cache.read_text())
     steps: List[Dict[str, Any]] = []
@@ -575,12 +577,20 @@ def build_replay(m: "Match") -> Dict[str, Any]:
     return out
 
 
-def placement_heatmap(m: "Match", res: float = 0.15) -> Dict[str, Any]:
+def placement_heatmap(m: "Match", res: float = 0.15,
+                      end: Optional[int] = None, n: Optional[int] = None) -> Dict[str, Any]:
     """Coach view: champion's value if the NEXT stone of the team on turn came to
-    rest at each grid point (thrower's perspective). One batched value pass."""
+    rest at each grid point (thrower's perspective). One batched value pass.
+    With ``end``/``n``: computed at the stored PRE-throw state of that historical
+    throw (replay coaching), instead of the live state."""
     from csas.common import POS_MAX, in_play_raw, raw_to_compact_m
 
-    x, c = m.state_c()
+    if end is not None and n is not None:
+        rec = find_throw(m, int(end), int(n))
+        x = np.asarray(rec["pre_state"], dtype=np.float32)
+        c = np.asarray(rec["pre_cond"], dtype=np.float32)
+    else:
+        x, c = m.state_c()
     block = int(round(float(c[2])))
     raw = np.asarray(x, dtype=np.float32).reshape(-1, 2) * POS_MAX
     live = in_play_raw(raw)
@@ -615,3 +625,33 @@ def placement_heatmap(m: "Match", res: float = 0.15) -> Dict[str, Any]:
     return {"team": "A" if block == 0 else "B", "alongs": alongs.tolist(),
             "lats": lats.tolist(), "v": grid,
             "note": "champion value if your next stone rested here (your perspective)"}
+
+
+def find_throw(m: "Match", end: int, n: int) -> Dict[str, Any]:
+    for e in m.data["ends"]:
+        for rec in e["throws"]:
+            if rec["end"] == end and rec["n"] == n:
+                return rec
+    raise ValueError(f"no throw end={end} n={n}")
+
+
+def throw_traj(m: "Match", end: int, n: int) -> Dict[str, Any]:
+    """One historical throw's display trajectory + post board (for opponent-move
+    animation in online play and replay stepping)."""
+    e = next((e for e in m.data["ends"] if e["throws"] and e["throws"][0]["end"] == end), None)
+    if e is None:
+        raise ValueError(f"no end {end}")
+    throws = e["throws"]
+    idx = next((i for i, r in enumerate(throws) if r["n"] == n), None)
+    if idx is None:
+        raise ValueError(f"no throw end={end} n={n}")
+    rec = throws[idx]
+    pre = np.asarray(rec["pre_state"], dtype=np.float32)
+    prec = np.asarray(rec["pre_cond"], dtype=np.float32)
+    post = (np.asarray(throws[idx + 1]["pre_state"], dtype=np.float32)
+            if idx + 1 < len(throws) else np.asarray(e["state"], dtype=np.float32))
+    with SIM_LOCK:
+        traj = throw_trajectory(pre, prec, np.asarray(rec["realized"], dtype=np.float32))
+    return {"end": end, "n": n, "team": rec["team"], "trajectory": traj,
+            "board": stones_from_state(post), "value_A": rec.get("value_A"),
+            "illegal": rec["illegal_takeout"]}

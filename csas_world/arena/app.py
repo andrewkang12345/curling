@@ -157,7 +157,8 @@ def create_match(body: NewMatch):
 def list_matches():
     out = []
     engine.MATCH_DIR.mkdir(exist_ok=True)
-    for p in sorted(engine.MATCH_DIR.glob("*.json"), key=lambda q: q.stat().st_mtime,
+    for p in sorted((q for q in engine.MATCH_DIR.glob("*.json") if ".replay" not in q.name),
+                    key=lambda q: q.stat().st_mtime,
                     reverse=True)[:50]:
         try:
             m = Match.load(p.stem)
@@ -268,17 +269,47 @@ def replay(mid: str):
     return engine.build_replay(_match(mid))
 
 
+_HEAT_CACHE: Dict[tuple, Any] = {}
+_TRAJ_CACHE: Dict[tuple, Any] = {}
+
+
 @app.get("/api/match/{mid}/heatmap")
-def heatmap(mid: str, res: float = 0.15):
+def heatmap(mid: str, res: float = 0.15, end: Optional[int] = None, n: Optional[int] = None):
     """Coach heatmap: champion value if the on-turn team's next stone rested at
-    each grid cell (thrower's perspective)."""
+    each grid cell (thrower's perspective). With end+n: at that historical
+    throw's pre-state (replay coaching); cached."""
     m = _match(mid)
-    if m.data["status"] != "in_progress":
-        raise HTTPException(409, "match is over")
+    historical = end is not None and n is not None
+    if not historical and m.data["status"] != "in_progress":
+        raise HTTPException(409, "match is over (pass end+n for replay heatmaps)")
+    key = (mid, end, n, round(float(res), 3))
+    if historical and key in _HEAT_CACHE:
+        return _HEAT_CACHE[key]
     try:
-        return engine.placement_heatmap(m, res=float(np.clip(res, 0.10, 0.40)))
+        out = engine.placement_heatmap(m, res=float(np.clip(res, 0.10, 0.40)), end=end, n=n)
     except ValueError as e:
         raise HTTPException(409, str(e))
+    if historical:
+        if len(_HEAT_CACHE) > 256:
+            _HEAT_CACHE.clear()
+        _HEAT_CACHE[key] = out
+    return out
+
+
+@app.get("/api/match/{mid}/throw_traj")
+def one_throw_traj(mid: str, end: int, n: int):
+    """One historical throw's trajectory + post board (opponent-move animation)."""
+    key = (mid, end, n)
+    if key in _TRAJ_CACHE:
+        return _TRAJ_CACHE[key]
+    try:
+        out = engine.throw_traj(_match(mid), end, n)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    if len(_TRAJ_CACHE) > 512:
+        _TRAJ_CACHE.clear()
+    _TRAJ_CACHE[key] = out
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -289,6 +320,11 @@ app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static"
 
 @app.get("/")
 def index():
+    return FileResponse(str(_HERE / "static" / "index.html"))
+
+
+@app.get("/join/{mid}")
+def join(mid: str):
     return FileResponse(str(_HERE / "static" / "index.html"))
 
 

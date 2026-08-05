@@ -1,7 +1,7 @@
 /* Curling Arena v2 — touch-first client. Views: home / game / replay.
+   Modes: vs champion, pass-&-play (hot seat), online (share link, poll sync).
    Coordinates from the API are compact meters: along (0=button, − = in front /
-   guard side, + = behind), lateral (+ = right). Board is drawn portrait with the
-   guard zone at the TOP (you look down the sheet at the house). */
+   guard side, + = behind), lateral (+ = right). Board drawn portrait, guards up. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -9,7 +9,11 @@ const S = {
   view: "home", ends: 4, match: null, coach: localStorage.coach === "1",
   mode: "draw", hitAct: "remove", target: null, hitSlot: null, tapTarget: null,
   heat: null, busy: false, replay: null, step: 0, solved: null,
+  mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
+  rHeatOn: false, rHeatCache: {},
 };
+const PLAY_RATE = 5;          // sim-seconds per real-second (real throw ≈ 24 s → ≈ 5 s)
+const REPLAY_RATE = 7;
 
 /* ---------------- api ---------------- */
 async function api(path, opts = {}) {
@@ -31,8 +35,9 @@ function toast(msg, ms = 2600) {
 }
 
 /* ---------------- board rendering ---------------- */
-const VIEW = { latHalf: 2.55, alongTop: -4.7, alongBot: 2.45 };  // top = in front
+const VIEW = { latHalf: 2.55, alongTop: -4.7, alongBot: 2.45 };
 const TEAM_FILL = { A: "#d33a2f", B: "#e8b71a" };
+const TEAM_NAME = { A: "Red", B: "Yellow" };
 const RINGS = [[1.83, "#3f7fbf"], [1.22, "#f5f7f9"], [0.61, "#d24646"], [0.15, "#f5f7f9"]];
 
 function setupCanvas(cv) {
@@ -56,7 +61,6 @@ function mkMap(cv) {
   };
 }
 function heatColor(v, lo, mid, hi) {
-  // diverging: red (worse) -> neutral gray -> blue (better); text stays in ink
   let t;
   if (v >= mid) { t = hi > mid ? Math.min(1, (v - mid) / (hi - mid)) : 0;
     return `rgba(${61 + (1 - t) * 80},${127 + (1 - t) * 20},${195},${0.14 + 0.34 * t})`; }
@@ -67,7 +71,6 @@ function drawBoard(cv, board, opts = {}) {
   const ctx = setupCanvas(cv), m = mkMap(cv);
   const w = cv.clientWidth, h = parseFloat(cv.style.height);
   ctx.fillStyle = "#eef4fa"; ctx.fillRect(0, 0, w, h);
-  // heat underlay
   if (opts.heat) {
     const { alongs, lats, v } = opts.heat;
     const vals = v.flat().filter((x) => x != null).sort((a, b) => a - b);
@@ -84,7 +87,6 @@ function drawBoard(cv, board, opts = {}) {
         }
     }
   }
-  // house rings + lines
   for (const [r, col] of RINGS) {
     ctx.beginPath(); ctx.arc(m.px(0), m.py(0), r * m.ppm, 0, 2 * Math.PI);
     ctx.fillStyle = col; ctx.globalAlpha = opts.heat ? 0.55 : 0.9; ctx.fill();
@@ -94,7 +96,6 @@ function drawBoard(cv, board, opts = {}) {
   ctx.beginPath(); ctx.moveTo(m.px(0), 0); ctx.lineTo(m.px(0), h); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, m.py(0)); ctx.lineTo(w, m.py(0)); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(0, m.py(-1.974)); ctx.lineTo(w, m.py(-1.974)); ctx.stroke();
-  // trajectory (dashed)
   if (opts.traj && opts.traj.frames && opts.traj.frames.length > 1) {
     const slot = opts.traj.stone_slot;
     ctx.save(); ctx.setLineDash([9, 7]); ctx.lineWidth = 2.5;
@@ -108,19 +109,16 @@ function drawBoard(cv, board, opts = {}) {
     }
     ctx.stroke(); ctx.restore();
   }
-  // stones
   const R = 0.145 * m.ppm;
   for (const s of board || []) {
-    const ghost = opts.ghost && opts.ghost.has && opts.ghost.has(s.slot);
     ctx.beginPath(); ctx.arc(m.px(s.lateral), m.py(s.along), R, 0, 2 * Math.PI);
-    ctx.fillStyle = TEAM_FILL[s.team]; ctx.globalAlpha = ghost ? 0.45 : 1; ctx.fill();
+    ctx.fillStyle = TEAM_FILL[s.team]; ctx.fill();
     ctx.lineWidth = s.slot === opts.hilite ? 3.5 : 1.6;
     ctx.strokeStyle = s.slot === opts.hilite ? "#0ea5e9" : "rgba(20,25,35,.8)";
-    ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.stroke();
     ctx.beginPath(); ctx.arc(m.px(s.lateral), m.py(s.along), R * 0.45, 0, 2 * Math.PI);
     ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.fill();
   }
-  // ghost predicted board (preview)
   if (opts.predicted) {
     for (const s of opts.predicted) {
       ctx.beginPath(); ctx.arc(m.px(s.lateral), m.py(s.along), R, 0, 2 * Math.PI);
@@ -128,7 +126,6 @@ function drawBoard(cv, board, opts = {}) {
       ctx.strokeStyle = TEAM_FILL[s.team]; ctx.stroke(); ctx.setLineDash([]);
     }
   }
-  // target crosshair
   if (opts.target) {
     const [al, la] = opts.target;
     ctx.strokeStyle = "#0b76c4"; ctx.lineWidth = 2.5;
@@ -142,12 +139,39 @@ function drawBoard(cv, board, opts = {}) {
   return m;
 }
 
+/* Real-time-paced throw animation. traj.dt = sim seconds per frame. */
+function animateTraj(cv, traj, finalBoard, rate) {
+  return new Promise((resolve) => {
+    const finish = () => { if (finalBoard) drawBoard(cv, finalBoard, {}); resolve(); };
+    if (!traj || !traj.frames || traj.frames.length < 2) { finish(); return; }
+    const frames = traj.frames, dt = traj.dt || 0.1;
+    const t0 = performance.now();
+    const tick = (now) => {
+      const idx = Math.floor(((now - t0) / 1000) * rate / dt);
+      const f = frames[Math.min(idx, frames.length - 1)];
+      const stones = [];
+      for (let slot = 0; slot < f.length; slot++) {
+        const p = f[slot];
+        if (p && p[0] != null) stones.push({ slot, team: slot < 6 ? "A" : "B", along: p[0], lateral: p[1] });
+      }
+      drawBoard(cv, stones, {});
+      if (idx >= frames.length + 2) finish();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+function animateThrow(cv, result, rate = PLAY_RATE) {
+  return animateTraj(cv, result?.trajectory, result?.board, rate);
+}
+
 /* ---------------- view switching ---------------- */
 function show(view) {
   S.view = view;
   for (const v of ["home", "game", "replay"]) $(`view-${v}`).classList.toggle("hidden", v !== view);
   $("homeBtn").classList.toggle("hidden", view === "home");
   $("scorechip").classList.toggle("hidden", view === "home");
+  if (view !== "game") stopPolling();
   if (view === "home") loadMatches();
 }
 
@@ -169,34 +193,72 @@ async function loadMatches() {
         <span class="sub">${when} · end ${r.end}/${r.ends_scheduled}</span></span>
         <span class="score">${r.totals.A}:${r.totals.B}</span>
         <span class="tag">${live ? "continue ▶" : "replay"}</span>`;
-      b.onclick = () => live && r.players.A === "human" ? resumeMatch(r.id) : openReplay(r.id);
+      b.onclick = () => live && Object.values(r.players).includes("human")
+        ? resumeMatch(r.id) : openReplay(r.id);
       $("matchList").appendChild(b);
     }
   } catch (e) { $("matchList").innerHTML = `<p class="hint">${e.message}</p>`; }
 }
 
-async function newMatch() {
-  $("newGameBtn").disabled = true;
+function sidesFor(match) {
+  // which sides does THIS device control?
+  const humans = Object.keys(match.players).filter((s) => match.players[s] === "human");
+  if (humans.length <= 1) return new Set(humans);
+  const claimed = localStorage["side_" + match.id];
+  return claimed ? new Set([claimed]) : new Set(humans);   // hot-seat = both
+}
+
+async function newMatch(kind) {
   try {
+    const players = kind === "champ" ? { A: "human", B: "champion" } : { A: "human", B: "human" };
+    const labels = kind === "champ" ? { A: "You", B: "Champion" } : { A: "Red", B: "Yellow" };
     const d = await api("/api/match", { method: "POST", body: {
-      players: { A: "human", B: "champion" }, labels: { A: "You", B: "Champion" },
-      ends: S.ends, first_hammer: "random" } });
-    S.match = d.match; resetShot(); show("game"); renderGame();
+      players, labels, ends: S.ends, first_hammer: "random" } });
+    S.match = d.match;
+    S.online = kind === "online";
+    if (kind === "online") {
+      localStorage["side_" + d.match.id] = "A";
+      const link = `${location.origin}/join/${d.match.id}`;
+      $("shareLink").value = link;
+      $("shareModal").classList.remove("hidden");
+    }
+    S.mySides = sidesFor(d.match);
+    S.seenThrows = countThrows(d.match);
+    resetShot(); show("game"); renderGame();
     maybePowerPlay();
+    if (S.online) startPolling();
   } catch (e) { toast(e.message); }
-  $("newGameBtn").disabled = false;
 }
 async function resumeMatch(mid) {
   try {
     const d = await api(`/api/match/${mid}`);
-    S.match = d.match; resetShot(); show("game"); renderGame(); maybePowerPlay();
+    S.match = d.match;
+    const humans = Object.values(d.match.players).filter((p) => p === "human").length;
+    S.online = humans === 2 && !!localStorage["side_" + mid];
+    S.mySides = sidesFor(d.match);
+    S.seenThrows = countThrows(d.match);
+    resetShot(); show("game"); renderGame(); maybePowerPlay();
+    if (humans === 2) startPolling();
   } catch (e) { toast(e.message); }
+}
+async function joinFromLink(mid) {
+  try {
+    const d = await api(`/api/match/${mid}`);
+    if (!localStorage["side_" + mid]) localStorage["side_" + mid] = "B";
+    history.replaceState(null, "", "/");
+    S.match = d.match; S.online = true;
+    S.mySides = sidesFor(d.match);
+    S.seenThrows = countThrows(d.match);
+    resetShot(); show("game"); renderGame(); maybePowerPlay(); startPolling();
+    toast(`You are ${TEAM_NAME[[...S.mySides][0]]} — good curling!`, 3600);
+  } catch (e) { toast("Couldn't join: " + e.message, 4000); show("home"); }
 }
 
 /* ---------------- game ---------------- */
+function countThrows(m) { return m.ends.reduce((a, e) => a + (e.throws ? e.throws.length : 0), 0); }
 function humanOnTurn() {
   const m = S.match;
-  return m && m.status === "in_progress" && m.players[m.turn.team] === "human";
+  return m && m.status === "in_progress" && S.mySides.has(m.turn.team);
 }
 function resetShot() {
   S.target = null; S.hitSlot = null; S.tapTarget = null; S.heat = null; S.solved = null;
@@ -212,19 +274,23 @@ function renderGame() {
   if (m.status === "finished") {
     $("statusbar").innerHTML = `<b>Match over</b> — ${m.totals.A}:${m.totals.B}`;
   } else {
-    const you = m.players[t.team] === "human";
+    const mine = S.mySides.has(t.team);
+    const who = m.players[t.team] === "champion" ? "champion…"
+      : mine ? (S.mySides.size > 1 ? `<b>${TEAM_NAME[t.team]}'s throw</b>` : "<b>your throw</b>")
+      : `waiting for ${TEAM_NAME[t.team]}…`;
     const mode = curEnd().mode;
     $("statusbar").innerHTML =
       `End <b>${t.end}</b>/${m.ends_scheduled} · Throw <b>${t.throw}</b>/10 · ` +
       `<span class="dot ${t.hammer === "A" ? "red" : "yel"}"></span> hammer` +
       (mode !== "standard" ? ` · <b>${mode.replace("pp_", "power play ")}</b>` : "") +
-      ` · ${you ? "<b>your throw</b>" : "champion…"}`;
+      ` · ${who}`;
   }
   drawBoard($("board"), m.board, {
     target: S.mode === "draw" ? S.target : S.tapTarget,
     hilite: S.hitSlot, heat: S.heat,
     predicted: S.solved?.preview?.predicted_board || null,
   });
+  $("undoBtn").classList.toggle("hidden", S.online);
   updateShotUI();
   renderCoach();
 }
@@ -236,7 +302,7 @@ function updateShotUI() {
      (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget)));
   $("throwBtn").disabled = !ready;
   $("previewBtn").classList.toggle("hidden", !(S.coach && ready));
-  $("hint").textContent = !my ? (S.match.status === "finished" ? "" : "Waiting for the champion…")
+  $("hint").textContent = !my ? (S.match.status === "finished" ? "" : "Waiting for the other team…")
     : S.mode === "draw" ? (S.target ? "Target set — Throw when ready." : "Tap the ice where the stone should stop.")
     : S.hitSlot == null ? "Tap a stone on the board."
     : S.hitAct === "remove" ? "Take-out selected — Throw when ready."
@@ -244,10 +310,9 @@ function updateShotUI() {
 }
 
 function boardTapped(al, la) {
-  if (S.view === "replay" || !humanOnTurn() || S.busy) return;
+  if (S.view !== "game" || !humanOnTurn() || S.busy) return;
   if (S.mode === "draw") { S.target = [al, la]; S.solved = null; }
   else {
-    // nearest stone within 0.5 m -> select; else if tap-act awaiting target, set it
     let best = null, bd = 0.5;
     for (const s of S.match.board) {
       const d = Math.hypot(s.along - al, s.lateral - la);
@@ -279,7 +344,8 @@ async function doThrow() {
       if (rep.end_result) announceEnd(rep.end_result);
     }
     if (d.result?.end_result) announceEnd(d.result.end_result);
-    S.match = d.match; resetShot(); renderGame();
+    S.match = d.match; S.seenThrows = countThrows(d.match);
+    resetShot(); renderGame();
     if (d.match.status === "finished") matchOver();
     else maybePowerPlay();
   } catch (e) { toast(e.message, 4200); }
@@ -297,50 +363,30 @@ async function doPreview() {
   } catch (e) { toast(e.message, 4000); }
 }
 
-function animateThrow(cv, result) {
-  // result = {throw, trajectory, board} from /throw, /champion_move, or replies[]
-  return new Promise((resolve) => {
-    const traj = result?.trajectory;
-    const finish = () => { if (result?.board) drawBoard(cv, result.board, {}); resolve(); };
-    if (!traj || !traj.frames || traj.frames.length < 2) { finish(); return; }
-    const frames = traj.frames;
-    let i = 0;
-    const tick = () => {
-      const f = frames[Math.min(i, frames.length - 1)];
-      const stones = [];
-      for (let slot = 0; slot < f.length; slot++) {
-        const p = f[slot];
-        if (p && p[0] != null) stones.push({ slot, team: slot < 6 ? "A" : "B", along: p[0], lateral: p[1] });
-      }
-      drawBoard(cv, stones, {});
-      i += 2;
-      if (i > frames.length + 3) finish();
-      else requestAnimationFrame(tick);
-    };
-    tick();
-  });
-}
 function announceEnd(er) {
   if (!er || !er.score) return;
   const t = er.score.team, p = er.score.points;
-  toast(t ? `End ${er.end}: ${t === "A" ? "You" : "Champion"} score${t === "A" ? "" : "s"} ${p}` : `End ${er.end}: blanked`, 3800);
+  const name = S.match && S.match.labels ? (S.match.labels[t] || TEAM_NAME[t]) : TEAM_NAME[t];
+  toast(t ? `End ${er.end}: ${name} scores ${p}` : `End ${er.end}: blanked`, 3800);
 }
 function matchOver() {
+  stopPolling();
   const m = S.match;
-  const you = m.totals.A, ch = m.totals.B;
-  $("overTitle").textContent = you > ch ? "🏆 You win!" : you === ch ? "Tied match" : "Champion wins";
-  $("overBody").textContent = `Final score ${you} : ${ch} over ${m.ends_scheduled} ends.`;
+  const la = m.labels?.A || TEAM_NAME.A, lb = m.labels?.B || TEAM_NAME.B;
+  const w = m.totals.A > m.totals.B ? la : m.totals.B > m.totals.A ? lb : null;
+  $("overTitle").textContent = w ? `🏆 ${w} wins!` : "Tied match";
+  $("overBody").textContent = `Final score ${m.totals.A} : ${m.totals.B} over ${m.ends_scheduled} ends.`;
   $("overModal").classList.remove("hidden");
 }
 
 /* power play + champion resume */
 function ppAvailable() {
-  const m = S.match, e = curEnd(), t = m.turn;
+  const m = S.match, e = curEnd();
   return m.status === "in_progress" && !(e.throws || []).length && e.hammer &&
-    m.players[e.hammer] === "human" && !m.power_play_used[e.hammer];
+    m.players[e.hammer] === "human" && S.mySides.has(e.hammer) &&
+    !m.power_play_used[e.hammer];
 }
 async function maybePowerPlay() {
-  const m = S.match;
   if (ppAvailable()) { $("ppModal").classList.remove("hidden"); return; }
   await championIfOnTurn();
 }
@@ -353,7 +399,8 @@ async function championIfOnTurn() {
       await animateThrow($("board"), d.result);
       for (const rep of d.replies || []) await animateThrow($("board"), rep);
       if (d.result?.end_result) announceEnd(d.result.end_result);
-      S.match = d.match; resetShot();
+      S.match = d.match; S.seenThrows = countThrows(d.match);
+      resetShot();
       if (d.match.status === "finished") matchOver();
       else maybePowerPlay();
     } catch (e) { if (!/not on turn/.test(e.message)) toast(e.message); }
@@ -373,6 +420,44 @@ async function choosePP(wing) {
   await championIfOnTurn();
 }
 
+/* ---------------- online sync (polling) ---------------- */
+function startPolling() {
+  stopPolling();
+  S.pollTimer = setInterval(pollOnce, 2500);
+}
+function stopPolling() {
+  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+}
+async function pollOnce() {
+  if (!S.match || S.busy || S.view !== "game") return;
+  if (humanOnTurn()) return;                    // it's our move; nothing to fetch
+  try {
+    const d = await api(`/api/match/${S.match.id}`);
+    const newCount = countThrows(d.match);
+    if (newCount > S.seenThrows) {
+      S.busy = true;
+      // animate each unseen throw in order
+      const recs = [];
+      for (const e of d.match.ends)
+        for (const r of e.throws || []) recs.push(r);
+      for (const r of recs.slice(S.seenThrows)) {
+        try {
+          const tt = await api(`/api/match/${S.match.id}/throw_traj?end=${r.end}&n=${r.n}`);
+          await animateTraj($("board"), tt.trajectory, tt.board, PLAY_RATE);
+        } catch (err) { /* skip animation, still update */ }
+      }
+      S.seenThrows = newCount;
+      S.match = d.match; resetShot(); renderGame();
+      for (const e of d.match.ends) if (e.score && e.throws?.length === 0) { /* noop */ }
+      if (d.match.status === "finished") matchOver();
+      else maybePowerPlay();
+      S.busy = false;
+    } else {
+      S.match = d.match; renderGame();
+    }
+  } catch (e) { /* transient network — keep polling */ }
+}
+
 /* coach */
 function renderCoach() {
   $("coachBtn").classList.toggle("active", S.coach);
@@ -383,7 +468,7 @@ function renderCoach() {
   for (const r of throws.slice(-8)) {
     const d = document.createElement("span");
     d.className = "evalpill " + (r.value_A >= 0 ? "up" : "down");
-    d.textContent = `${r.team === "A" ? "you" : "ch"} ${r.value_A > 0 ? "+" : ""}${r.value_A.toFixed(2)}`;
+    d.textContent = `${TEAM_NAME[r.team]} ${r.value_A > 0 ? "+" : ""}${r.value_A.toFixed(2)}`;
     tr.appendChild(d);
   }
 }
@@ -402,7 +487,8 @@ async function loadHeat() {
 async function openReplay(mid) {
   try {
     const d = await api(`/api/match/${mid}/replay`);
-    S.replay = d; S.step = 0;
+    S.replay = d; S.step = 0; S.rHeatOn = false; S.rHeatCache = {};
+    $("rHeatBtn").classList.remove("active");
     $("rSlider").max = Math.max(d.steps.length - 1, 0);
     $("rSlider").value = 0;
     const la = d.labels?.A || d.players.A, lb = d.labels?.B || d.players.B;
@@ -410,12 +496,32 @@ async function openReplay(mid) {
     show("replay"); renderStep();
   } catch (e) { toast(e.message); }
 }
-function renderStep() {
+async function renderStep(animate = false) {
   const d = S.replay;
   if (!d || !d.steps.length) return;
   const st = d.steps[S.step];
-  drawBoard($("rboard"), st.board_after, { traj: st.traj });
-  const who = st.team === "A" ? (d.labels?.A || "A") : (d.labels?.B || "B");
+  let heat = null;
+  if (S.rHeatOn) {
+    heat = S.rHeatCache[S.step];
+    if (heat === undefined) {
+      $("rLabel").textContent = "computing heatmap…";
+      try {
+        heat = await api(`/api/match/${d.id}/heatmap?end=${st.end}&n=${st.n}`);
+      } catch (e) { heat = null; }
+      S.rHeatCache[S.step] = heat;
+    }
+  }
+  $("rHeatLegend").classList.toggle("hidden", !(S.rHeatOn && heat));
+  if (animate && !S.rHeatOn) {
+    drawBoard($("rboard"), st.board_before, {});
+    await animateTraj($("rboard"), st.traj, st.board_after, REPLAY_RATE);
+  } else if (S.rHeatOn && heat) {
+    // coach view: the board BEFORE the throw + where the next stone should go
+    drawBoard($("rboard"), st.board_before, { heat, traj: st.traj });
+  } else {
+    drawBoard($("rboard"), st.board_after, { traj: st.traj });
+  }
+  const who = st.team === "A" ? (d.labels?.A || "Red") : (d.labels?.B || "Yellow");
   $("rLabel").innerHTML = `End ${st.end} · Throw ${st.n}/10 · <b>${who}</b>` +
     (st.illegal ? " · ⚠️ forfeited (early take-out)" : "") +
     (st.end_score && st.end_score.team ? ` — <b>${st.end_score.team} scores ${st.end_score.points}</b>` : "") +
@@ -435,7 +541,11 @@ window.addEventListener("resize", () => { if (S.view === "game") renderGame(); i
 
 document.addEventListener("DOMContentLoaded", () => {
   bindCanvas($("board"), boardTapped);
-  $("newGameBtn").onclick = newMatch;
+  document.querySelectorAll(".newgame").forEach((b) => b.onclick = () => newMatch(b.dataset.kind));
+  $("joinBtn").onclick = () => {
+    const code = $("joinCode").value.trim().split("/").pop();
+    if (code) joinFromLink(code);
+  };
   document.querySelectorAll(".endsel").forEach((b) => b.onclick = () => {
     document.querySelectorAll(".endsel").forEach((x) => x.classList.remove("sel"));
     b.classList.add("sel"); S.ends = +b.dataset.ends;
@@ -455,15 +565,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("undoBtn").onclick = async () => {
     try {
       const d = await api(`/api/match/${S.match.id}/undo`, { method: "POST", body: {} });
-      S.match = d.match; resetShot(); renderGame(); toast("Rolled back your last throw");
+      S.match = d.match; S.seenThrows = countThrows(d.match);
+      resetShot(); renderGame(); toast("Rolled back the last throw");
     } catch (e) { toast(e.message); }
   };
   $("coachBtn").onclick = () => {
     S.coach = !S.coach; localStorage.coach = S.coach ? "1" : "0";
-    renderGame(); renderCoach();
+    if (S.view === "game") renderGame();
+    renderCoach();
     if (S.view === "replay") renderStep();
   };
-  $("homeBtn").onclick = () => { show("home"); };
+  $("homeBtn").onclick = () => show("home");
   $("heatBtn").onclick = loadHeat;
   document.querySelectorAll(".ppchoice").forEach((b) => b.onclick = () => choosePP(b.dataset.w));
   $("ppSkip").onclick = () => choosePP(null);
@@ -472,8 +584,21 @@ document.addEventListener("DOMContentLoaded", () => {
   $("replayBack").onclick = () => show("home");
   $("rSlider").oninput = (e) => { S.step = +e.target.value; renderStep(); };
   $("rPrev").onclick = () => { S.step = Math.max(0, S.step - 1); renderStep(); };
-  $("rNext").onclick = () => { S.step = Math.min(S.replay.steps.length - 1, S.step + 1); renderStep(); };
+  $("rNext").onclick = () => { S.step = Math.min(S.replay.steps.length - 1, S.step + 1); renderStep(true); };
+  $("rHeatBtn").onclick = () => {
+    S.rHeatOn = !S.rHeatOn;
+    $("rHeatBtn").classList.toggle("active", S.rHeatOn);
+    renderStep();
+  };
+  $("shareCopy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("shareLink").value); toast("Link copied"); }
+    catch (e) { $("shareLink").select(); document.execCommand("copy"); toast("Link copied"); }
+  };
+  $("shareClose").onclick = () => $("shareModal").classList.add("hidden");
   renderCoach();
-  show("home");
+
+  const joinMatch = location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
+  if (joinMatch) joinFromLink(joinMatch[1]);
+  else show("home");
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 });

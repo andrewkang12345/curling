@@ -134,3 +134,11 @@ canvas.board {
 }
 .backrow { margin-bottom: 10px; }
 .linky { background: none; color: var(--accent); padding: 6px 4px; font-size: 14px; }
+
+/* v2.1: multiplayer + replay heat */
+.modegrid { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.modegrid .bigbtn { width: 100%; }
+.joinrow { display: flex; gap: 8px; margin-top: 14px; }
+.joinrow input { flex: 1; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--ink); font-size: 14px; min-height: 44px; }
+.subbtn.active { border-color: var(--accent); color: var(--accent); }

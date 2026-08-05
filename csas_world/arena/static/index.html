@@ -27,13 +27,21 @@
 <!-- ============ HOME ============ -->
 <div id="view-home" class="view">
   <div class="hero">
-    <h1>Play the Champion</h1>
-    <p>Mixed-doubles curling vs a self-play–trained AI. Real physics, real sweep-less nerves.</p>
-    <button id="newGameBtn" class="bigbtn">New game</button>
+    <h1>Curling, anyone?</h1>
+    <p>Mixed-doubles on real physics. Play the AI champion or a friend.</p>
+    <div class="modegrid">
+      <button class="bigbtn newgame" data-kind="champ">🤖 Play the Champion</button>
+      <button class="subbtn newgame" data-kind="hotseat">👥 Pass &amp; play</button>
+      <button class="subbtn newgame" data-kind="online">🌐 Online with a friend</button>
+    </div>
     <div class="endsrow">Ends:
       <button class="chip endsel" data-ends="2">2</button>
       <button class="chip endsel sel" data-ends="4">4</button>
       <button class="chip endsel" data-ends="8">8</button>
+    </div>
+    <div class="joinrow">
+      <input id="joinCode" placeholder="Paste an invite link or code" inputmode="text">
+      <button id="joinBtn" class="subbtn">Join</button>
     </div>
   </div>
   <h2 class="section">Recent matches</h2>
@@ -85,6 +93,10 @@
     <button id="rPrev" class="subbtn">◀︎</button>
     <input type="range" id="rSlider" min="0" max="0" value="0">
     <button id="rNext" class="subbtn">▶︎</button>
+    <button id="rHeatBtn" class="subbtn" title="Best-spot heatmap for this throw">🔥</button>
+  </div>
+  <div id="rHeatLegend" class="heatlegend hidden">
+    <span>worse</span><span class="bar"></span><span>better spot for this throw</span>
   </div>
   <div class="steplabel" id="rLabel"></div>
 </div>
@@ -113,6 +125,19 @@
     <div class="row">
       <button id="overReplay" class="subbtn">Watch replay</button>
       <button id="overHome" class="bigbtn" style="flex:1">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- share online game modal -->
+<div id="shareModal" class="modal hidden">
+  <div class="card">
+    <h3>Invite your opponent</h3>
+    <p>Send them this link — the game starts as soon as they throw. You are <b>Red</b>.</p>
+    <input id="shareLink" readonly style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);font-size:13px">
+    <div class="row" style="margin-top:12px">
+      <button id="shareCopy" class="subbtn">Copy link</button>
+      <button id="shareClose" class="bigbtn" style="flex:1">Start playing</button>
     </div>
   </div>
 </div>
