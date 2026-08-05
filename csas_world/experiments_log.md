@@ -1976,3 +1976,19 @@ losses' data, the control is retrained too: az_v24b_ctrl = same union + recipe, 
 loss. Gate: one k=4 N=250 draw, rank-vs-ctrl. Watch val_rank_acc trajectory for the same
 overfit signature; if it recurs at 656 pairs, the honest conclusion is that rank
 generalization needs pair counts only a dedicated big collection can provide.
+
+**EXP-064b raw (auto):** rank vs ctrl k=4: winrate 0.5095, dScore +0.0342 ± 0.0284/end (n=2516)
+
+**VERDICT (2026-08-05): overfit FIXED, generalization NOT achieved, gate not promising.**
+At 656 pairs + rank-aware augmentation the val rank_acc no longer collapses (held ~65-72%
+across epochs vs 064's monotone fall to 56%) — but it also never IMPROVED past the ~70%
+baseline, and val rank loss stayed flat (~0.20). The gate leaned positive (+0.034 ± 0.028,
+t=+1.2, winrate 0.510) but is below the 2·SE bar and squarely in known noise territory.
+Per pre-registration: no escalation.
+
+**Where (iii) stands.** The 30% misranking headroom measurement is solid and unchanged; the
+margin-rank objective at O(10^2-10^3) pairs stabilizes but does not teach a better ordering
+function. Closing the headroom needs O(10^4+) certified pairs, and MC-grounded pair
+generation costs ~1-2 min/pair — a dedicated multi-day collection. That is the price tag
+for the value channel; park it as costed-but-unfunded. The remaining untested lever is
+(iv) full capacity x data retraining. Champion: az_v14d, unchanged since 2026-07-12.
