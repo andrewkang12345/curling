@@ -1904,3 +1904,33 @@ REINFORCED, and the data-scale question decouples from the operator question ent
 The generic data lever (the 9x significant-ply test) is now the sole ranked-first open
 direction; the combined new-rules corpora (az_v19 672 + az_v20/21 1,296 games ≈ 2,000
 games, ~1,270 sig plies across both estimands) are banked toward it.
+
+**EXP-063 raw eval aggregates (auto-appended):**
+
+- vsinc_k4: winrate 0.4942, dScore -0.0684 ± 0.0354/end (n=2516)
+
+**VERDICT (2026-08-05): NOT PROMISING — leaning NEGATIVE (−0.068 ± 0.035, t≈−1.9, k=4
+single draw).** No full battery, no promotion; az_v14d unchanged. Chain valid (432 games,
+15.3% sig rate = ~2x historical as predicted; best @ epoch 16 with guards; one accounting
+note: the 1/3 val split left ~440 TRAIN sig plies — comparable to, not double, the
+controls').
+
+**Reading.** The pre-registered risk materialized, plus a sharper mechanism the negative
+lean suggests: distilling soft-topk of VALUE-RANKED candidates narrows the policy toward
+the value head's preferred modes — but deployed strength = proposal DIVERSITY x value
+discrimination. Sharpening proposals toward V's argmax makes the 48 play-time candidates
+redundant, shrinking the effective search width that robust selection feeds on. Self-
+distillation eats the exploration that made selection strong. (Testable: compare candidate
+diversity / effective sample size of az_v22 vs az_v14d proposals.) Caveat per our own
+meta-lesson: a single ~2σ read shouldn't be over-interpreted — but direction alone kills
+promotion.
+
+**Where this leaves the program.** The POLICY-distillation channel is now closed from every
+direction: weak teacher (screen_tree — actually behind the student, EXP-061), alternative
+estimand (StT, 056/058/059), off-distribution (061), and now the certified-stronger
+self-teacher (one generation). Three independent results point at the VALUE head as the
+binding constraint: EXP-062 (all decision-quality gains live in value ranking at big k),
+the az_v15-VH test (val-MSE improvement ≠ play), and this cycle. Priority lever is now
+**(iii) decision-relevant value training** (rank loss on gated top-1/top-2 pairs — cheap:
+backfill posts on existing corpora incl. this one, add margin loss, A/B with the shortened
+gate), with (iv) full capacity x data retraining as the big-swing alternative.
