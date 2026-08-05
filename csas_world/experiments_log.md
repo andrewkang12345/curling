@@ -1819,6 +1819,32 @@ recipe, no rank loss). Shortened gate: one k=4 N=250 draw vs the control; a seco
 incumbent az_v14d if the first is promising. Readouts: gate dScore (primary), val_rank_acc
 trajectory (does the loss actually fix the orderings), val_value_mse_mcts guard (does rank
 training damage calibration).
+---
+
+## EXP-065 / az_v25 — EXPLOITABILITY PROBE (asymmetric best response to az_v14d) — IN FLIGHT 2026-08-05
+
+**Question (user).** Was SELF-play itself the limitation? EXP-042's meta-game matrix was
+perfectly transitive (Nash = pure az_v14d), which under transitivity makes PSRO collapse to
+our incumbent ratchet — but that matrix covered ~5 one-lineage siblings, and we have NEVER
+trained an asymmetric best response TO the champion (every corpus ever was symmetric
+self-play). This is the last cheap experiment that could overturn the ceiling conclusion.
+
+**Design.** New selfplay BR mode (--opponent-world): the fixed champion plays one block per
+game with its deployed 48x8 selection; the LEARNER's plies get bigsel targets at
+EXPLORATORY proposal temperature (1.35/1.6 vs deployed 1.1/1.2 — the single-cycle
+asymmetry: exploring responses deployed play would not try); value targets = realized
+MATCHUP returns (value-against-az_v14d specifically, the BR value function). Opponent plies
+carry conf=0 (no distillation) but contribute matchup value/unroll signal. ~400 games,
+3 workers; fine-tune az_v14d (exp_052 recipe); shortened gate: one k=4 N=250 draw vs
+az_v14d.
+
+**Pre-registered outcomes.** (1) BR ≈ parity: az_v14d is near-unexploitable within our
+model class — the transitivity verdict holds at the level that matters, PSRO is
+conclusively unnecessary, and the noise-ceiling reading gets its strongest evidence.
+(2) BR wins > 2·SE: self-play left exploitability on the table; the matrix was
+population-limited; a population/BR loop becomes the live path (a working BR operator IS
+the "teacher that stays ahead"). Either outcome is decisive. Caveat: one BR generation
+from a champion warm start bounds one iteration of exploitation, not the BR-loop limit.
 
 
 ## Template for a new entry

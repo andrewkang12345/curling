@@ -41,7 +41,8 @@ from .collect import _live_np, _two_step_rewards
 
 
 def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
-              cfg, M, rng, device, noise, scorer="tree", diag=None):
+              cfg, M, rng, device, noise, scorer="tree", diag=None,
+              opponent=None, opponent_block=None):
     """Play one full end from `root` with search-at-every-ply. Returns the trajectory
     (states/conds/persps incl. terminal), executed actions, per-ply distillation
     targets, and the final margin in block-0 perspective.
@@ -97,6 +98,25 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
         return v if vp == rp else -v
 
     while hh >= 1:
+        if opponent is not None and int(round(cc[2])) == int(opponent_block):
+            # EXP-065 asymmetric best-response mode: this block is played by a FIXED
+            # opponent (deployed selection); no distillation target (conf=0), but the
+            # ply still contributes matchup value/unroll targets.
+            a_int = np.asarray(opponent.select_intended(st, cc, hh, sie, int(opponent_block)),
+                               np.float32)
+            dists.append((a_int[None].copy(), np.array([1.0], np.float32), 0.0))
+            a = a_int
+            if noise is not None:
+                a = noise.sample_batch(a[None], 1).reshape(4).astype(np.float32)
+            post, _ = env_bridge.apply_legality(st, env_bridge.simulate_one(st, cc, a)[None], hh, cc)
+            acts_exec.append(a.copy())
+            st = post[0]
+            cc = env_bridge.next_condition(cc, sie)
+            hh -= 1
+            states.append(st.copy())
+            conds.append(cc.copy())
+            persps.append(int(round(cc[2])))
+            continue
         if scorer == "terminal":
             res = search_state(policy, amean_t, astd_t, amean_np, astd_np, None,
                                st, cc, hh, sie, int(round(cc[2])),
@@ -413,6 +433,8 @@ def main():
     ap.add_argument("--games", type=int, default=160, help="games for THIS shard")
     ap.add_argument("--policy", required=True)
     ap.add_argument("--value", required=True)
+    ap.add_argument("--opponent-world", default=None,
+                    help="EXP-065: fixed-opponent ckpt (deployed 48x8 selection) playing one block per game; learner plies get targets, values become matchup returns")
     ap.add_argument("--value-world", default=None,
                     help="WorldModel ckpt: its value head evaluates tree leaves "
                          "(closes the V-improves-search loop). Overrides --value.")
@@ -477,13 +499,23 @@ def main():
         print(f"[selfplay] execution noise ON: {cfg.search.noise_config}", flush=True)
     collect_reward = bool(getattr(cfg.search, "collect_step_reward", False))
 
+    opponent = None
+    if args.opponent_world:
+        from ..eval.head_to_head import WorldPlayer
+        opponent = WorldPlayer(args.opponent_world, device, name="fixed_opponent",
+                               noise=make_noise(cfg.search.noise_config, args.seed + 977),
+                               sel_noise_samples=8)
+        print(f"[selfplay] BR mode: fixed opponent = {args.opponent_world} (deployed 48x8)", flush=True)
+
     recs: List[Dict[str, np.ndarray]] = []
     diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel") else None
     n_games = 0
     for i, root in enumerate(roots):
         g = play_game(root, policy, amean_t, astd_t, amean_np, astd_np,
                       value_model, cfg.search, M, rng, device, noise,
-                      scorer=args.scorer, diag=diag)
+                      scorer=args.scorer, diag=diag,
+                      opponent=opponent,
+                      opponent_block=(i % 2) if opponent is not None else None)
         if g is None:
             continue
         states, conds, persps, acts_exec, dists, m0 = g
