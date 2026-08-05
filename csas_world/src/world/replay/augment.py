@@ -59,6 +59,10 @@ def augment_batch(batch: Dict[str, torch.Tensor], p_flip: float = 0.5,
         for key in ("bc_action_raw", "a_raw", "dist_actions_raw"):
             a = batch[key]
             batch[key] = torch.where(m(flip, a.dim()), _neg_action(a), a)
+        for key in ("rank_pos", "rank_neg"):          # EXP-064: ranked post-states are states
+            if key in batch:
+                a = batch[key]
+                batch[key] = torch.where(m(flip, a.dim()), _flip_state(a), a)
 
     # ---- team-slot swap ----
     if bool(swap.any()):
@@ -72,6 +76,12 @@ def augment_batch(batch: Dict[str, torch.Tensor], p_flip: float = 0.5,
         batch["c0"] = torch.where(m(swap, 2), c0, batch["c0"])
         nc = batch["next_conds"].clone(); nc[..., 2] = 1.0 - nc[..., 2]
         batch["next_conds"] = torch.where(m(swap, 3), nc, batch["next_conds"])
+        if "rank_pos" in batch:                       # EXP-064 rank fields follow the swap
+            for key in ("rank_pos", "rank_neg"):
+                a = batch[key]
+                batch[key] = torch.where(m(swap, a.dim()), _swap_state(a), a)
+            rc = batch["rank_cond"].clone(); rc[:, 2] = 1.0 - rc[:, 2]
+            batch["rank_cond"] = torch.where(m(swap, 2), rc, batch["rank_cond"])
     return batch
 
 

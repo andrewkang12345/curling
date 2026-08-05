@@ -1959,3 +1959,20 @@ the az_v15-VH test (val-MSE improvement ≠ play), and this cycle. Priority leve
 **(iii) decision-relevant value training** (rank loss on gated top-1/top-2 pairs — cheap:
 backfill posts on existing corpora incl. this one, add margin loss, A/B with the shortened
 gate), with (iv) full capacity x data retraining as the big-swing alternative.
+
+**EXP-064 raw (auto):** az_v23_rank vs az_v19 control k=4: winrate 0.4984, dScore -0.0191 ± 0.0371/end (n=2516)
+
+**EXP-064 POST-MORTEM + 064b (2026-08-05).** The A/B tested nothing: val rank_acc fell
+monotonically 69.6% -> 56.5% over epochs 10-13 while val_value_mse stayed flat — **294
+training pairs overfit within one epoch**; the (correct) early-stop selected epoch 9 ≈ the
+unchanged baseline, so the parity gate compared baseline-to-baseline. Concept untested;
+pair count was the failure.
+
+**EXP-064b (relaunched, matched at 2.2x pairs + pair augmentation):** backfilled the
+az_v20/21 StT corpus (+362/46 pairs; merged 656 train / 118 val), and extended the
+flip/team-swap batch augmentation to the rank fields (states flip, rank_cond block swaps —
+consistent transforms, ~4x effective pair diversity). Because the union corpus changes ALL
+losses' data, the control is retrained too: az_v24b_ctrl = same union + recipe, NO rank
+loss. Gate: one k=4 N=250 draw, rank-vs-ctrl. Watch val_rank_acc trajectory for the same
+overfit signature; if it recurs at 656 pairs, the honest conclusion is that rank
+generalization needs pair counts only a dedicated big collection can provide.
