@@ -536,3 +536,82 @@ class Match:
 
 __all__ = ["Match", "Champion", "stones_from_state", "throw_trajectory",
            "SHOTS_IN_END", "SIM_LOCK", "ACTION_LOW", "ACTION_HIGH", "ACTION_NAMES"]
+
+
+# --------------------------------------------------------------------------- #
+# Replay + coach heatmap (arena v2)
+# --------------------------------------------------------------------------- #
+def build_replay(m: "Match") -> Dict[str, Any]:
+    """Exact board sequence for every throw (from the stored pre_state snapshots)
+    + display trajectories re-run from the realized params. Cached on disk for
+    finished matches."""
+    import json as _json
+    cache = MATCH_DIR / f"{m.id}.replay.json"
+    if m.data["status"] != "in_progress" and cache.exists():
+        return _json.loads(cache.read_text())
+    steps: List[Dict[str, Any]] = []
+    for e in m.data["ends"]:
+        throws = e["throws"]
+        for ti, t in enumerate(throws):
+            pre = np.asarray(t["pre_state"], dtype=np.float32)
+            prec = np.asarray(t["pre_cond"], dtype=np.float32)
+            post = (np.asarray(throws[ti + 1]["pre_state"], dtype=np.float32)
+                    if ti + 1 < len(throws) else np.asarray(e["state"], dtype=np.float32))
+            with SIM_LOCK:
+                traj = throw_trajectory(pre, prec, np.asarray(t["realized"], dtype=np.float32))
+            steps.append({
+                "end": t["end"], "n": t["n"], "team": t["team"],
+                "board_before": stones_from_state(pre),
+                "board_after": stones_from_state(post),
+                "traj": traj, "value_A": t.get("value_A"),
+                "illegal": t["illegal_takeout"], "hammer": e["hammer"], "mode": e["mode"],
+                "end_score": e["score"] if ti == len(throws) - 1 else None,
+            })
+    out = {"id": m.id, "labels": m.data["labels"], "players": m.data["players"],
+           "totals": m.data["totals"], "winner": m.data["winner"],
+           "status": m.data["status"], "steps": steps}
+    if m.data["status"] != "in_progress":
+        cache.write_text(_json.dumps(out))
+    return out
+
+
+def placement_heatmap(m: "Match", res: float = 0.15) -> Dict[str, Any]:
+    """Coach view: champion's value if the NEXT stone of the team on turn came to
+    rest at each grid point (thrower's perspective). One batched value pass."""
+    from csas.common import POS_MAX, in_play_raw, raw_to_compact_m
+
+    x, c = m.state_c()
+    block = int(round(float(c[2])))
+    raw = np.asarray(x, dtype=np.float32).reshape(-1, 2) * POS_MAX
+    live = in_play_raw(raw)
+    team_slots = range(0, 6) if block == 0 else range(6, 12)
+    free = [s for s in team_slots if not live[s]]
+    if not free:
+        raise ValueError("no stones left for the team on turn")
+    slot = free[0]
+    alongs = np.round(np.arange(-4.0, 2.201, res), 4)
+    lats = np.round(np.arange(-2.25, 2.251, res), 4)
+    occupied = ([(float(cm[0]), float(cm[1])) for cm in raw_to_compact_m(raw)[live]]
+                if live.any() else [])
+    boards, cells = [], []
+    for ai, al in enumerate(alongs):
+        for li, la in enumerate(lats):
+            if any((al - o0) ** 2 + (la - o1) ** 2 < 0.29 ** 2 for o0, o1 in occupied):
+                continue
+            # single-point inverse of raw_to_compact_m (that helper needs all 12 slots)
+            r = np.asarray([la / 0.003048 + 750.0, 800.0 - al / 0.003048], dtype=np.float32)
+            b = np.asarray(x, dtype=np.float32).copy().reshape(-1, 2)
+            b[slot] = r / POS_MAX
+            boards.append(b.reshape(-1))
+            cells.append((ai, li))
+    nc = env_bridge.next_condition(c, SHOTS_IN_END)
+    ch = Champion.get()
+    with SIM_LOCK:
+        v = ch.player._value_fn(np.asarray(boards, dtype=np.float32), nc)
+    v = -np.asarray(v, dtype=np.float64)          # thrower's perspective
+    grid = [[None] * len(lats) for _ in alongs]
+    for (ai, li), val in zip(cells, v):
+        grid[ai][li] = round(float(val), 3)
+    return {"team": "A" if block == 0 else "B", "alongs": alongs.tolist(),
+            "lats": lats.tolist(), "v": grid,
+            "note": "champion value if your next stone rested here (your perspective)"}

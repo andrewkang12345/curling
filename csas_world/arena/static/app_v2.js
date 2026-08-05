@@ -1,0 +1,479 @@
+/* Curling Arena v2 — touch-first client. Views: home / game / replay.
+   Coordinates from the API are compact meters: along (0=button, − = in front /
+   guard side, + = behind), lateral (+ = right). Board is drawn portrait with the
+   guard zone at the TOP (you look down the sheet at the house). */
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const S = {
+  view: "home", ends: 4, match: null, coach: localStorage.coach === "1",
+  mode: "draw", hitAct: "remove", target: null, hitSlot: null, tapTarget: null,
+  heat: null, busy: false, replay: null, step: 0, solved: null,
+};
+
+/* ---------------- api ---------------- */
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    headers: { "content-type": "application/json" },
+    ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).detail; } catch (e) { /* keep statusText */ }
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return r.json();
+}
+function toast(msg, ms = 2600) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.add("hidden"), ms);
+}
+
+/* ---------------- board rendering ---------------- */
+const VIEW = { latHalf: 2.55, alongTop: -4.7, alongBot: 2.45 };  // top = in front
+const TEAM_FILL = { A: "#d33a2f", B: "#e8b71a" };
+const RINGS = [[1.83, "#3f7fbf"], [1.22, "#f5f7f9"], [0.61, "#d24646"], [0.15, "#f5f7f9"]];
+
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth;
+  const h = w * (VIEW.alongBot - VIEW.alongTop) / (2 * VIEW.latHalf);
+  cv.style.height = h + "px";
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+function mkMap(cv) {
+  const w = cv.clientWidth, ppm = w / (2 * VIEW.latHalf);
+  return {
+    px: (lat) => (lat + VIEW.latHalf) * ppm,
+    py: (along) => (along - VIEW.alongTop) * ppm,
+    invLat: (x) => x / ppm - VIEW.latHalf,
+    invAlong: (y) => y / ppm + VIEW.alongTop,
+    ppm,
+  };
+}
+function heatColor(v, lo, mid, hi) {
+  // diverging: red (worse) -> neutral gray -> blue (better); text stays in ink
+  let t;
+  if (v >= mid) { t = hi > mid ? Math.min(1, (v - mid) / (hi - mid)) : 0;
+    return `rgba(${61 + (1 - t) * 80},${127 + (1 - t) * 20},${195},${0.14 + 0.34 * t})`; }
+  t = mid > lo ? Math.min(1, (mid - v) / (mid - lo)) : 0;
+  return `rgba(${195},${61 + (1 - t) * 80},${61 + (1 - t) * 80},${0.14 + 0.34 * t})`;
+}
+function drawBoard(cv, board, opts = {}) {
+  const ctx = setupCanvas(cv), m = mkMap(cv);
+  const w = cv.clientWidth, h = parseFloat(cv.style.height);
+  ctx.fillStyle = "#eef4fa"; ctx.fillRect(0, 0, w, h);
+  // heat underlay
+  if (opts.heat) {
+    const { alongs, lats, v } = opts.heat;
+    const vals = v.flat().filter((x) => x != null).sort((a, b) => a - b);
+    if (vals.length) {
+      const q = (p) => vals[Math.floor(p * (vals.length - 1))];
+      const lo = q(0.05), mid = q(0.5), hi = q(0.95);
+      const ca = (alongs[1] - alongs[0]) * m.ppm, cl = (lats[1] - lats[0]) * m.ppm;
+      for (let ai = 0; ai < alongs.length; ai++)
+        for (let li = 0; li < lats.length; li++) {
+          const val = v[ai][li];
+          if (val == null) continue;
+          ctx.fillStyle = heatColor(val, lo, mid, hi);
+          ctx.fillRect(m.px(lats[li]) - cl / 2, m.py(alongs[ai]) - ca / 2, cl + 0.5, ca + 0.5);
+        }
+    }
+  }
+  // house rings + lines
+  for (const [r, col] of RINGS) {
+    ctx.beginPath(); ctx.arc(m.px(0), m.py(0), r * m.ppm, 0, 2 * Math.PI);
+    ctx.fillStyle = col; ctx.globalAlpha = opts.heat ? 0.55 : 0.9; ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+  ctx.strokeStyle = "rgba(40,70,110,.25)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(m.px(0), 0); ctx.lineTo(m.px(0), h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, m.py(0)); ctx.lineTo(w, m.py(0)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, m.py(-1.974)); ctx.lineTo(w, m.py(-1.974)); ctx.stroke();
+  // trajectory (dashed)
+  if (opts.traj && opts.traj.frames && opts.traj.frames.length > 1) {
+    const slot = opts.traj.stone_slot;
+    ctx.save(); ctx.setLineDash([9, 7]); ctx.lineWidth = 2.5;
+    ctx.strokeStyle = "rgba(45,110,170,.8)"; ctx.beginPath();
+    let started = false;
+    for (const f of opts.traj.frames) {
+      const p = f[slot];
+      if (!p || p[0] == null) continue;
+      if (!started) { ctx.moveTo(m.px(p[1]), m.py(p[0])); started = true; }
+      else ctx.lineTo(m.px(p[1]), m.py(p[0]));
+    }
+    ctx.stroke(); ctx.restore();
+  }
+  // stones
+  const R = 0.145 * m.ppm;
+  for (const s of board || []) {
+    const ghost = opts.ghost && opts.ghost.has && opts.ghost.has(s.slot);
+    ctx.beginPath(); ctx.arc(m.px(s.lateral), m.py(s.along), R, 0, 2 * Math.PI);
+    ctx.fillStyle = TEAM_FILL[s.team]; ctx.globalAlpha = ghost ? 0.45 : 1; ctx.fill();
+    ctx.lineWidth = s.slot === opts.hilite ? 3.5 : 1.6;
+    ctx.strokeStyle = s.slot === opts.hilite ? "#0ea5e9" : "rgba(20,25,35,.8)";
+    ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(m.px(s.lateral), m.py(s.along), R * 0.45, 0, 2 * Math.PI);
+    ctx.fillStyle = "rgba(255,255,255,.55)"; ctx.fill();
+  }
+  // ghost predicted board (preview)
+  if (opts.predicted) {
+    for (const s of opts.predicted) {
+      ctx.beginPath(); ctx.arc(m.px(s.lateral), m.py(s.along), R, 0, 2 * Math.PI);
+      ctx.setLineDash([4, 4]); ctx.lineWidth = 2;
+      ctx.strokeStyle = TEAM_FILL[s.team]; ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  // target crosshair
+  if (opts.target) {
+    const [al, la] = opts.target;
+    ctx.strokeStyle = "#0b76c4"; ctx.lineWidth = 2.5;
+    const r = 11;
+    ctx.beginPath(); ctx.arc(m.px(la), m.py(al), r, 0, 2 * Math.PI); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(m.px(la) - r - 6, m.py(al)); ctx.lineTo(m.px(la) + r + 6, m.py(al));
+    ctx.moveTo(m.px(la), m.py(al) - r - 6); ctx.lineTo(m.px(la), m.py(al) + r + 6);
+    ctx.stroke();
+  }
+  return m;
+}
+
+/* ---------------- view switching ---------------- */
+function show(view) {
+  S.view = view;
+  for (const v of ["home", "game", "replay"]) $(`view-${v}`).classList.toggle("hidden", v !== view);
+  $("homeBtn").classList.toggle("hidden", view === "home");
+  $("scorechip").classList.toggle("hidden", view === "home");
+  if (view === "home") loadMatches();
+}
+
+/* ---------------- home ---------------- */
+async function loadMatches() {
+  try {
+    const d = await api("/api/matches");
+    const rows = d.matches.filter((x) => Object.values(x.players).includes("human") ||
+                                          x.status === "finished").slice(0, 12);
+    if (!rows.length) { $("matchList").innerHTML = '<p class="hint">No matches yet — play one!</p>'; return; }
+    $("matchList").innerHTML = "";
+    for (const r of rows) {
+      const b = document.createElement("button");
+      b.className = "matchrow";
+      const la = r.labels?.A || r.players.A, lb = r.labels?.B || r.players.B;
+      const when = new Date(r.created * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const live = r.status === "in_progress";
+      b.innerHTML = `<span class="who"><span class="names">${la} vs ${lb}</span>
+        <span class="sub">${when} · end ${r.end}/${r.ends_scheduled}</span></span>
+        <span class="score">${r.totals.A}:${r.totals.B}</span>
+        <span class="tag">${live ? "continue ▶" : "replay"}</span>`;
+      b.onclick = () => live && r.players.A === "human" ? resumeMatch(r.id) : openReplay(r.id);
+      $("matchList").appendChild(b);
+    }
+  } catch (e) { $("matchList").innerHTML = `<p class="hint">${e.message}</p>`; }
+}
+
+async function newMatch() {
+  $("newGameBtn").disabled = true;
+  try {
+    const d = await api("/api/match", { method: "POST", body: {
+      players: { A: "human", B: "champion" }, labels: { A: "You", B: "Champion" },
+      ends: S.ends, first_hammer: "random" } });
+    S.match = d.match; resetShot(); show("game"); renderGame();
+    maybePowerPlay();
+  } catch (e) { toast(e.message); }
+  $("newGameBtn").disabled = false;
+}
+async function resumeMatch(mid) {
+  try {
+    const d = await api(`/api/match/${mid}`);
+    S.match = d.match; resetShot(); show("game"); renderGame(); maybePowerPlay();
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------------- game ---------------- */
+function humanOnTurn() {
+  const m = S.match;
+  return m && m.status === "in_progress" && m.players[m.turn.team] === "human";
+}
+function resetShot() {
+  S.target = null; S.hitSlot = null; S.tapTarget = null; S.heat = null; S.solved = null;
+  $("heatlegend").classList.add("hidden");
+}
+function curEnd() { return S.match.ends[S.match.ends.length - 1]; }
+
+function renderGame() {
+  const m = S.match;
+  if (!m) return;
+  $("scA").textContent = m.totals.A; $("scB").textContent = m.totals.B;
+  const t = m.turn;
+  if (m.status === "finished") {
+    $("statusbar").innerHTML = `<b>Match over</b> — ${m.totals.A}:${m.totals.B}`;
+  } else {
+    const you = m.players[t.team] === "human";
+    const mode = curEnd().mode;
+    $("statusbar").innerHTML =
+      `End <b>${t.end}</b>/${m.ends_scheduled} · Throw <b>${t.throw}</b>/10 · ` +
+      `<span class="dot ${t.hammer === "A" ? "red" : "yel"}"></span> hammer` +
+      (mode !== "standard" ? ` · <b>${mode.replace("pp_", "power play ")}</b>` : "") +
+      ` · ${you ? "<b>your throw</b>" : "champion…"}`;
+  }
+  drawBoard($("board"), m.board, {
+    target: S.mode === "draw" ? S.target : S.tapTarget,
+    hilite: S.hitSlot, heat: S.heat,
+    predicted: S.solved?.preview?.predicted_board || null,
+  });
+  updateShotUI();
+  renderCoach();
+}
+function updateShotUI() {
+  const my = humanOnTurn();
+  $("shotbar").style.opacity = my ? 1 : 0.55;
+  const ready = my && !S.busy &&
+    ((S.mode === "draw" && S.target) ||
+     (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget)));
+  $("throwBtn").disabled = !ready;
+  $("previewBtn").classList.toggle("hidden", !(S.coach && ready));
+  $("hint").textContent = !my ? (S.match.status === "finished" ? "" : "Waiting for the champion…")
+    : S.mode === "draw" ? (S.target ? "Target set — Throw when ready." : "Tap the ice where the stone should stop.")
+    : S.hitSlot == null ? "Tap a stone on the board."
+    : S.hitAct === "remove" ? "Take-out selected — Throw when ready."
+    : (S.tapTarget ? "Tap target set — Throw when ready." : "Now tap where that stone should end up.");
+}
+
+function boardTapped(al, la) {
+  if (S.view === "replay" || !humanOnTurn() || S.busy) return;
+  if (S.mode === "draw") { S.target = [al, la]; S.solved = null; }
+  else {
+    // nearest stone within 0.5 m -> select; else if tap-act awaiting target, set it
+    let best = null, bd = 0.5;
+    for (const s of S.match.board) {
+      const d = Math.hypot(s.along - al, s.lateral - la);
+      if (d < bd) { bd = d; best = s.slot; }
+    }
+    if (best != null) { S.hitSlot = best; S.tapTarget = null; }
+    else if (S.hitSlot != null && S.hitAct === "tap") S.tapTarget = [al, la];
+    S.solved = null;
+  }
+  renderGame();
+}
+
+function shotBody(preview) {
+  const side = S.match.turn.team;
+  if (S.mode === "draw") return { side, type: "draw", target: S.target, preview };
+  if (S.hitAct === "remove") return { side, type: "after_contact", stone_slot: S.hitSlot, remove: true, preview };
+  return { side, type: "after_contact", stone_slot: S.hitSlot, target: S.tapTarget, preview };
+}
+
+async function doThrow() {
+  if (S.busy) return;
+  S.busy = true; $("busy").classList.remove("hidden"); $("busy").textContent = "Throwing…";
+  try {
+    const d = await api(`/api/match/${S.match.id}/throw`, { method: "POST", body: shotBody(false) });
+    await animateThrow($("board"), d.result);
+    for (const rep of d.replies || []) {
+      $("busy").textContent = "Champion is thinking…";
+      await animateThrow($("board"), rep);
+      if (rep.end_result) announceEnd(rep.end_result);
+    }
+    if (d.result?.end_result) announceEnd(d.result.end_result);
+    S.match = d.match; resetShot(); renderGame();
+    if (d.match.status === "finished") matchOver();
+    else maybePowerPlay();
+  } catch (e) { toast(e.message, 4200); }
+  S.busy = false; $("busy").classList.add("hidden");
+  renderGame();
+}
+async function doPreview() {
+  try {
+    const d = await api(`/api/match/${S.match.id}/solve`, { method: "POST", body: shotBody(true) });
+    S.solved = d;
+    const v = d.preview?.predicted_value_A;
+    toast(`Solver ${d.solver?.achieved_error_m != null ? d.solver.achieved_error_m + " m off target · " : ""}` +
+          (v != null ? `champion eval ${v > 0 ? "+" : ""}${v} (red persp.)` : ""), 4200);
+    renderGame();
+  } catch (e) { toast(e.message, 4000); }
+}
+
+function animateThrow(cv, result) {
+  // result = {throw, trajectory, board} from /throw, /champion_move, or replies[]
+  return new Promise((resolve) => {
+    const traj = result?.trajectory;
+    const finish = () => { if (result?.board) drawBoard(cv, result.board, {}); resolve(); };
+    if (!traj || !traj.frames || traj.frames.length < 2) { finish(); return; }
+    const frames = traj.frames;
+    let i = 0;
+    const tick = () => {
+      const f = frames[Math.min(i, frames.length - 1)];
+      const stones = [];
+      for (let slot = 0; slot < f.length; slot++) {
+        const p = f[slot];
+        if (p && p[0] != null) stones.push({ slot, team: slot < 6 ? "A" : "B", along: p[0], lateral: p[1] });
+      }
+      drawBoard(cv, stones, {});
+      i += 2;
+      if (i > frames.length + 3) finish();
+      else requestAnimationFrame(tick);
+    };
+    tick();
+  });
+}
+function announceEnd(er) {
+  if (!er || !er.score) return;
+  const t = er.score.team, p = er.score.points;
+  toast(t ? `End ${er.end}: ${t === "A" ? "You" : "Champion"} score${t === "A" ? "" : "s"} ${p}` : `End ${er.end}: blanked`, 3800);
+}
+function matchOver() {
+  const m = S.match;
+  const you = m.totals.A, ch = m.totals.B;
+  $("overTitle").textContent = you > ch ? "🏆 You win!" : you === ch ? "Tied match" : "Champion wins";
+  $("overBody").textContent = `Final score ${you} : ${ch} over ${m.ends_scheduled} ends.`;
+  $("overModal").classList.remove("hidden");
+}
+
+/* power play + champion resume */
+function ppAvailable() {
+  const m = S.match, e = curEnd(), t = m.turn;
+  return m.status === "in_progress" && !(e.throws || []).length && e.hammer &&
+    m.players[e.hammer] === "human" && !m.power_play_used[e.hammer];
+}
+async function maybePowerPlay() {
+  const m = S.match;
+  if (ppAvailable()) { $("ppModal").classList.remove("hidden"); return; }
+  await championIfOnTurn();
+}
+async function championIfOnTurn() {
+  const m = S.match;
+  if (m.status === "in_progress" && m.players[m.turn.team] === "champion") {
+    S.busy = true; $("busy").classList.remove("hidden"); $("busy").textContent = "Champion is thinking…";
+    try {
+      const d = await api(`/api/match/${m.id}/champion_move`, { method: "POST", body: {} });
+      await animateThrow($("board"), d.result);
+      for (const rep of d.replies || []) await animateThrow($("board"), rep);
+      if (d.result?.end_result) announceEnd(d.result.end_result);
+      S.match = d.match; resetShot();
+      if (d.match.status === "finished") matchOver();
+      else maybePowerPlay();
+    } catch (e) { if (!/not on turn/.test(e.message)) toast(e.message); }
+    S.busy = false; $("busy").classList.add("hidden"); renderGame();
+  }
+}
+async function choosePP(wing) {
+  $("ppModal").classList.add("hidden");
+  if (wing) {
+    try {
+      const d = await api(`/api/match/${S.match.id}/powerplay`, { method: "POST",
+        body: { side: curEnd().hammer, wing } });
+      S.match = d.match; renderGame();
+      toast(`Power play — ${wing} wing`);
+    } catch (e) { toast(e.message); }
+  }
+  await championIfOnTurn();
+}
+
+/* coach */
+function renderCoach() {
+  $("coachBtn").classList.toggle("active", S.coach);
+  $("coachpanel").classList.toggle("hidden", !(S.coach && S.view === "game"));
+  if (!S.coach || !S.match) return;
+  const tr = $("evaltrace"); tr.innerHTML = "";
+  const throws = (curEnd().throws || []).filter((r) => r.value_A != null);
+  for (const r of throws.slice(-8)) {
+    const d = document.createElement("span");
+    d.className = "evalpill " + (r.value_A >= 0 ? "up" : "down");
+    d.textContent = `${r.team === "A" ? "you" : "ch"} ${r.value_A > 0 ? "+" : ""}${r.value_A.toFixed(2)}`;
+    tr.appendChild(d);
+  }
+}
+async function loadHeat() {
+  if (!humanOnTurn()) { toast("Heatmap is for your throw"); return; }
+  $("heatBtn").disabled = true; $("heatBtn").textContent = "computing…";
+  try {
+    S.heat = await api(`/api/match/${S.match.id}/heatmap`);
+    $("heatlegend").classList.remove("hidden");
+    renderGame();
+  } catch (e) { toast(e.message); }
+  $("heatBtn").disabled = false; $("heatBtn").textContent = "🔥 Best-spot map";
+}
+
+/* ---------------- replay ---------------- */
+async function openReplay(mid) {
+  try {
+    const d = await api(`/api/match/${mid}/replay`);
+    S.replay = d; S.step = 0;
+    $("rSlider").max = Math.max(d.steps.length - 1, 0);
+    $("rSlider").value = 0;
+    const la = d.labels?.A || d.players.A, lb = d.labels?.B || d.players.B;
+    $("replayHeader").innerHTML = `<b>${la}</b> (red) vs <b>${lb}</b> (yellow) — final ${d.totals.A}:${d.totals.B}`;
+    show("replay"); renderStep();
+  } catch (e) { toast(e.message); }
+}
+function renderStep() {
+  const d = S.replay;
+  if (!d || !d.steps.length) return;
+  const st = d.steps[S.step];
+  drawBoard($("rboard"), st.board_after, { traj: st.traj });
+  const who = st.team === "A" ? (d.labels?.A || "A") : (d.labels?.B || "B");
+  $("rLabel").innerHTML = `End ${st.end} · Throw ${st.n}/10 · <b>${who}</b>` +
+    (st.illegal ? " · ⚠️ forfeited (early take-out)" : "") +
+    (st.end_score && st.end_score.team ? ` — <b>${st.end_score.team} scores ${st.end_score.points}</b>` : "") +
+    (S.coach && st.value_A != null ? ` · eval ${st.value_A > 0 ? "+" : ""}${st.value_A}` : "");
+  $("rSlider").value = S.step;
+}
+
+/* ---------------- wiring ---------------- */
+function bindCanvas(cv, handler) {
+  cv.addEventListener("pointerdown", (ev) => {
+    const rect = cv.getBoundingClientRect();
+    const map = mkMap(cv);
+    handler(map.invAlong(ev.clientY - rect.top), map.invLat(ev.clientX - rect.left));
+  });
+}
+window.addEventListener("resize", () => { if (S.view === "game") renderGame(); if (S.view === "replay") renderStep(); });
+
+document.addEventListener("DOMContentLoaded", () => {
+  bindCanvas($("board"), boardTapped);
+  $("newGameBtn").onclick = newMatch;
+  document.querySelectorAll(".endsel").forEach((b) => b.onclick = () => {
+    document.querySelectorAll(".endsel").forEach((x) => x.classList.remove("sel"));
+    b.classList.add("sel"); S.ends = +b.dataset.ends;
+  });
+  document.querySelectorAll(".modechip").forEach((b) => b.onclick = () => {
+    document.querySelectorAll(".modechip").forEach((x) => x.classList.remove("sel"));
+    b.classList.add("sel"); S.mode = b.dataset.m;
+    $("hitopts").classList.toggle("hidden", S.mode !== "hit");
+    S.target = null; S.hitSlot = null; S.tapTarget = null; S.solved = null; renderGame();
+  });
+  document.querySelectorAll(".hitopt").forEach((b) => b.onclick = () => {
+    document.querySelectorAll(".hitopt").forEach((x) => x.classList.remove("sel"));
+    b.classList.add("sel"); S.hitAct = b.dataset.h; S.tapTarget = null; renderGame();
+  });
+  $("throwBtn").onclick = doThrow;
+  $("previewBtn").onclick = doPreview;
+  $("undoBtn").onclick = async () => {
+    try {
+      const d = await api(`/api/match/${S.match.id}/undo`, { method: "POST", body: {} });
+      S.match = d.match; resetShot(); renderGame(); toast("Rolled back your last throw");
+    } catch (e) { toast(e.message); }
+  };
+  $("coachBtn").onclick = () => {
+    S.coach = !S.coach; localStorage.coach = S.coach ? "1" : "0";
+    renderGame(); renderCoach();
+    if (S.view === "replay") renderStep();
+  };
+  $("homeBtn").onclick = () => { show("home"); };
+  $("heatBtn").onclick = loadHeat;
+  document.querySelectorAll(".ppchoice").forEach((b) => b.onclick = () => choosePP(b.dataset.w));
+  $("ppSkip").onclick = () => choosePP(null);
+  $("overHome").onclick = () => { $("overModal").classList.add("hidden"); show("home"); };
+  $("overReplay").onclick = () => { $("overModal").classList.add("hidden"); openReplay(S.match.id); };
+  $("replayBack").onclick = () => show("home");
+  $("rSlider").oninput = (e) => { S.step = +e.target.value; renderStep(); };
+  $("rPrev").onclick = () => { S.step = Math.max(0, S.step - 1); renderStep(); };
+  $("rNext").onclick = () => { S.step = Math.min(S.replay.steps.length - 1, S.step + 1); renderStep(); };
+  renderCoach();
+  show("home");
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+});

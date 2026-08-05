@@ -31,9 +31,12 @@ from pydantic import BaseModel, Field
 from . import engine, solver
 from .engine import Champion, Match
 
+from fastapi.middleware.gzip import GZipMiddleware
+
 app = FastAPI(title="Curling Arena", version="1.0",
               description="Mixed-doubles arena: humans/agents vs the csas_world champion. "
                           "Agents: GET /api/protocol for the how-to.")
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # --------------------------------------------------------------------------- #
@@ -258,6 +261,26 @@ def champion_move(mid: str):
             "match": m.to_dict(), "text": m.text_state()}
 
 
+@app.get("/api/match/{mid}/replay")
+def replay(mid: str):
+    """Board-by-board replay: exact per-throw before/after boards (from stored
+    snapshots) + display trajectories. Cached for finished matches."""
+    return engine.build_replay(_match(mid))
+
+
+@app.get("/api/match/{mid}/heatmap")
+def heatmap(mid: str, res: float = 0.15):
+    """Coach heatmap: champion value if the on-turn team's next stone rested at
+    each grid cell (thrower's perspective)."""
+    m = _match(mid)
+    if m.data["status"] != "in_progress":
+        raise HTTPException(409, "match is over")
+    try:
+        return engine.placement_heatmap(m, res=float(np.clip(res, 0.10, 0.40)))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
 # --------------------------------------------------------------------------- #
 # Static UI
 # --------------------------------------------------------------------------- #
@@ -267,3 +290,25 @@ app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static"
 @app.get("/")
 def index():
     return FileResponse(str(_HERE / "static" / "index.html"))
+
+
+@app.get("/classic")
+def classic():
+    return FileResponse(str(_HERE / "static" / "classic.html"))
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(str(_HERE / "static" / "manifest.webmanifest"),
+                        media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(str(_HERE / "static" / "sw.js"),
+                        media_type="application/javascript")
+
+
+@app.get("/apple-touch-icon.png")
+def apple_icon():
+    return FileResponse(str(_HERE / "static" / "icons" / "icon-180.png"))
