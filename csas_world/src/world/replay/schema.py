@@ -26,8 +26,10 @@ FLOAT_FIELDS = (
     "value_target", "value_mask", "reward_target", "reward_mask",
     "outcome_margin", "outcome_mask", "consistency_mask",
     "bc_action_raw", "bc_mask", "dist_actions_raw", "dist_weights", "dist_mask",
+    "rank_pos", "rank_neg", "rank_cond", "rank_mask",
 )
 INT_FIELDS = ("horizon", "source")
+RANK_R = 4   # noisy executions stored per ranked action (EXP-064)
 
 
 def field_shapes(K: int, M: int) -> Dict[str, tuple]:
@@ -41,6 +43,7 @@ def field_shapes(K: int, M: int) -> Dict[str, tuple]:
         "consistency_mask": (K,),
         "bc_action_raw": (4,), "bc_mask": (),
         "dist_actions_raw": (M, 4), "dist_weights": (M,), "dist_mask": (),
+        "rank_pos": (RANK_R, 24), "rank_neg": (RANK_R, 24), "rank_cond": (3,), "rank_mask": (),
         "horizon": (), "source": (),
     }
 

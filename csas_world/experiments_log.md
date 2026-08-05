@@ -1794,6 +1794,31 @@ generously, and (d) its gains concentrate exactly where EXP-057 showed budget ma
 Risk (pre-registered): self-distillation of a value-ranked teacher can only teach the
 policy to propose what the value head already prefers — if the value head is the binding
 constraint, the cycle returns parity and the (iii) value-rank lever becomes the priority.
+---
+
+## EXP-064 / az_v23 — DECISION-RELEVANT VALUE TRAINING (rank loss) — IN FLIGHT 2026-08-05
+
+**The (iii) lever, now the priority** (three independent results point at the value head as
+the binding constraint: EXP-062, the az_v15-VH test, EXP-063's negative). Deployed
+selection uses V only to RANK candidate posts; we now train that directly.
+
+**Machinery.** New rank fields in the record schema (zero-filled on legacy shards —
+backward compatible); `scripts/backfill_rank_posts.py` simulates RANK_R=4 noisy executions
+of the stored top-1/top-2 target actions per sig-gated ply (h>=2) and stores the
+post-states + next_cond (az_v19 corpus: 294 train / 72 val pairs); margin rank loss in
+losses.py: relu(margin − [Q(top1)−Q(top2)]) with Q(a) = −V(post,next_cond) mean over the R
+posts — the exact deployed sign convention. loss.value_rank=0.3, margin 0.25.
+
+**Smoke finding (baseline):** az_v14d's value head orders only **70.4%** of the gated
+top-1/top-2 pairs correctly — a third of the teacher's confident comparisons are misranked
+by the head that deployed selection relies on. That is the measured headroom.
+
+**A/B (perfectly matched).** az_v23_rank = az_v14d + exp_052 recipe + rank loss on the
+rank-backfilled az_v19 corpus vs the EXISTING az_v19_newrules control (same corpus, same
+recipe, no rank loss). Shortened gate: one k=4 N=250 draw vs the control; a second vs the
+incumbent az_v14d if the first is promising. Readouts: gate dScore (primary), val_rank_acc
+trajectory (does the loss actually fix the orderings), val_value_mse_mcts guard (does rank
+training damage calibration).
 
 
 ## Template for a new entry

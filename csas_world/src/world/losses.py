@@ -100,6 +100,31 @@ def compute_losses(model: WorldModel, batch: Dict[str, torch.Tensor],
         metrics["value_mse"] = float((v_mse / max(len(steps), 1)).detach())
         metrics["value_nll"] = float((v_nll / max(len(steps), 1)).detach())
 
+    # ---------------- decision-relevant value RANK loss (EXP-064) ---------- #
+    # Deployed selection uses V only to RANK candidate posts; train that directly:
+    # on sig-gated plies (teacher confidently preferred top-1 over top-2), require
+    # Q(top1) - Q(top2) >= margin, with Q(a) = -V(post(a), next_cond) — exactly the
+    # deployed sign convention. rank_* fields are backfilled; legacy shards have
+    # rank_mask = 0 and skip this block.
+    if (model.value_head is not None and getattr(cfg, "value_rank", 0.0) > 0
+            and "rank_pos" in batch):
+        rmask = batch["rank_mask"]
+        sel = rmask > 0.5
+        if sel.any():
+            rp = batch["rank_pos"][sel]      # [b,R,24]
+            rn = batch["rank_neg"][sel]
+            rc = batch["rank_cond"][sel]     # [b,3]
+            b, R, _ = rp.shape
+            rc_r = rc.unsqueeze(1).expand(b, R, 3).reshape(b * R, 3)
+            vp = model.value_head.value(model.encode(rp.reshape(b * R, 24), rc_r)).view(b, R)
+            vn = model.value_head.value(model.encode(rn.reshape(b * R, 24), rc_r)).view(b, R)
+            gap = (-vp.mean(dim=1)) - (-vn.mean(dim=1))
+            margin = float(getattr(cfg, "rank_margin", 0.25))
+            r_loss = torch.relu(margin - gap).mean()
+            total = total + cfg.value_rank * r_loss
+            metrics["value_rank"] = float(r_loss.detach())
+            metrics["rank_acc"] = float((gap > 0).float().mean().detach())
+
     # ---------------- step reward (2-step return, EXP-009) ----------- #
     # Optional disentanglement of the near-term signal from terminal value: the head
     # regresses the 2-step return (rule margin if the end ends within 2 plies, else the

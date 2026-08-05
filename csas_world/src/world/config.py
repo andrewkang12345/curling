@@ -61,6 +61,8 @@ class LossCfg:
     # dedicated baseline -- not on MCTS search-values (which it overfits). The
     # search still drives the policy via distillation.
     value_from_mcts: bool = False
+    value_rank: float = 0.0        # EXP-064: margin rank loss on gated top-1/top-2 posts
+    rank_margin: float = 0.25
     outcome: float = 0.0            # tactical end-outcome CE; default off (value head is sufficient)
     step_reward: float = 0.0        # EXP-009: weight of the 2-step-return reward-head Huber loss
     reward_action_conditioned: bool = False  # EXP-012: predict r(s,a) from the POST-action latent G(s,a)
