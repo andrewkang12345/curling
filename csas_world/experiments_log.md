@@ -2070,3 +2070,21 @@ k=4 draw (vsinc_k4_v2c); certify EXPLOITABILITY FOUND iff pooled two-draw dScore
 else the verdict is 'no certified exploitability' with the lean recorded. Note v1
 (unselected ckpt) read −0.021 — checkpoint selection moved the readout by +0.08, itself
 evidence the guard fix mattered.
+
+**VERDICT (2026-08-06): EXPLOITABILITY CERTIFIED.** Draw 2: +0.1157 ± 0.0302. POOLED
+two-draw: **dScore +0.0788 ± 0.0238/end, t=+3.31** (n=5,032 ends) — far above the
+pre-registered 2.1 bar. The first certified positive challenger since az_v14d's creation,
+after ~12 failed symmetric attempts — and it took only 432 asymmetric BR games
+(exploratory bigsel targets + MATCHUP value returns vs the fixed champion).
+
+**What this overturns and what it doesn't.** (1) az_v14d IS exploitable within our own
+model class — symmetric self-play left real learnable surface on the table; the user's
+PSRO instinct is vindicated, and EXP-042's transitivity conclusion was population-limited
+exactly as suspected. (2) The noise-ceiling reading WEAKENS: there is learnable structure;
+the symmetric loop just couldn't see it (its opponent moved with the learner; the BR's
+fixed opponent + matchup-grounded values could). (3) NOT yet established: whether az_v25_br
+is generally stronger or an anti-v14d specialist (classic exploiter trade-off), and whether
+BR iteration compounds (league ratchet). Follow-up gates launched: az_v25_br vs
+az_v19_newrules k=4 (generality) + vs az_v14d k=8 (EXP-057 confirmation-draw policy).
+Promotion decision deferred to the meta-game view (champion should approximate the
+population Nash, not the last exploiter).
