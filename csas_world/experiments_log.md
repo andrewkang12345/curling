@@ -2050,3 +2050,14 @@ function. Closing the headroom needs O(10^4+) certified pairs, and MC-grounded p
 generation costs ~1-2 min/pair — a dedicated multi-day collection. That is the price tag
 for the value channel; park it as costed-but-unfunded. The remaining untested lever is
 (iv) full capacity x data retraining. Champion: az_v14d, unchanged since 2026-07-12.
+
+**EXP-065 raw eval aggregates (auto-appended; header said EXP-063 — driver-clone artifact):**
+
+- vsinc_k4 (v1): winrate 0.4988, dScore -0.0207 ± 0.0288/end (n=2516)
+
+**v1 INVALID by the EXP-058 standard (2026-08-06).** "best at epoch none": the value guard
+(3.60, calibrated for self-play corpora) is unreachable on a BR corpus — exploratory-temp
+learner play inflates outcome variance, so val_value_mse_mcts starts ~4.9 at epoch 9 and
+never passes; the gate evaluated unselected epoch-13 weights. Corpus itself is fine
+(432 games, 430 sig plies at 10.0%). Retraining with guard 5.5 (fits the corpus's
+variance floor), re-gating; corrected verdict below.
