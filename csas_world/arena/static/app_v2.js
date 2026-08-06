@@ -326,20 +326,25 @@ function updateShotUI() {
     : S.mode === "draw" ? (S.target ? "Target set — Throw when ready." : "Tap the ice where the stone should stop.")
     : S.hitSlot == null ? "Tap a stone on the board."
     : S.hitAct === "remove" ? "Take-out selected — Throw when ready."
-    : (S.tapTarget ? "Tap target set — Throw when ready." : "Now tap where that stone should end up.");
+    : (S.tapTarget ? "Target set — Throw when ready (tap another stone to switch)."
+       : "Now tap where that stone should end up (even right beside another stone).");
 }
 
 function boardTapped(al, la) {
   if (S.view !== "game" || !humanOnTurn() || S.busy) return;
   if (S.mode === "draw") { S.target = [al, la]; S.solved = null; }
   else {
-    let best = null, bd = 0.5;
+    // Once a stone is picked in tap mode, the next tap is the TARGET — except a
+    // tap directly ON a stone (tight radius), which switches the selection.
+    // (A generous radius here used to swallow targets near stones, e.g. freezes.)
+    const targeting = S.hitSlot != null && S.hitAct === "tap";
+    let best = null, bd = targeting ? 0.22 : 0.5;
     for (const s of S.match.board) {
       const d = Math.hypot(s.along - al, s.lateral - la);
       if (d < bd) { bd = d; best = s.slot; }
     }
-    if (best != null) { S.hitSlot = best; S.tapTarget = null; }
-    else if (S.hitSlot != null && S.hitAct === "tap") S.tapTarget = [al, la];
+    if (best != null && best !== S.hitSlot) { S.hitSlot = best; S.tapTarget = null; }
+    else if (targeting) S.tapTarget = [al, la];
     S.solved = null;
   }
   renderGame();
