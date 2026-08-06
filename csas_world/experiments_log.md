@@ -2088,3 +2088,22 @@ BR iteration compounds (league ratchet). Follow-up gates launched: az_v25_br vs
 az_v19_newrules k=4 (generality) + vs az_v14d k=8 (EXP-057 confirmation-draw policy).
 Promotion decision deferred to the meta-game view (champion should approximate the
 population Nash, not the last exploiter).
+
+**FOLLOW-UP GATES (2026-08-06) — BOTH CERTIFY; PROMOTION EXECUTED.**
+- GENERALITY: az_v25_br vs az_v19_newrules (never seen in training) k=4: **+0.1002 ±
+  0.0312/end** (wr 0.508) — beats a foreign strong model as hard as its training target;
+  NOT an anti-v14d specialist.
+- CONFIRMATION at deployment settings (EXP-057 policy): vs az_v14d k=8: **+0.1065 ±
+  0.0228/end (t≈4.7)** — the edge GROWS at k=8, exactly the dilution pattern of a real gap.
+- Meta-game check: v25 > v14d, v25 > v19, v14d ≈ v19 — transitive with v25 on top; Nash =
+  pure az_v25_br. **az_v25_br/best.pt IS THE NEW GLOBAL CHAMPION** — first promotion since
+  az_v14d (2026-07-16), achieved by ONE asymmetric best-response generation (432 games).
+  Arena deployment updated. az_v14d retained as the reference incumbent.
+
+**EXP-067 (launched): BR ITERATION 2 — does the league ratchet compound?** Same machinery,
+one generation up: opponent = az_v25_br (fixed), learner init = az_v25_br, exploratory
+bigsel targets + matchup returns, ~400 games, guard 5.5, k=4 gate vs az_v25_br + k=8
+confirmation if certified. If iteration 2 also certifies, the BR/league loop is the
+self-improvement engine this project spent a month proving self-play could not be; if it
+returns parity, one BR step was a one-time harvest of the symmetric loop's blind spot —
+either answer sets the roadmap.
