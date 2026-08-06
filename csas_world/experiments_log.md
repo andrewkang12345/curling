@@ -2061,3 +2061,12 @@ learner play inflates outcome variance, so val_value_mse_mcts starts ~4.9 at epo
 never passes; the gate evaluated unselected epoch-13 weights. Corpus itself is fine
 (432 games, 430 sig plies at 10.0%). Retraining with guard 5.5 (fits the corpus's
 variance floor), re-gating; corrected verdict below.
+
+**v2 gate (valid ckpt, best @ epoch 11, guard 5.5): winrate 0.5022, dScore +0.0604 ±
+0.0368/end (t≈1.64, n=2,516).** The largest positive lean any challenger has shown vs
+az_v14d — but below the pre-registered 2·SE bar and in the t≈1.6-1.7 replication-death zone
+(EXP-053/056/EXP-054-lo). PRE-REGISTERED BEFORE DRAW 2 (2026-08-06): run one more identical
+k=4 draw (vsinc_k4_v2c); certify EXPLOITABILITY FOUND iff pooled two-draw dScore t >= 2.1;
+else the verdict is 'no certified exploitability' with the lean recorded. Note v1
+(unselected ckpt) read −0.021 — checkpoint selection moved the readout by +0.08, itself
+evidence the guard fix mattered.
