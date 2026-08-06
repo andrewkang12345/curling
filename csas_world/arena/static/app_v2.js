@@ -17,10 +17,20 @@ const REPLAY_RATE = 7;
 
 /* ---------------- api ---------------- */
 async function api(path, opts = {}) {
-  const r = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), opts.timeoutMs || 90000);
+  let r;
+  try {
+    r = await fetch(path, {
+      headers: { "content-type": "application/json" },
+      signal: ctl.signal,
+      ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (e) {
+    clearTimeout(kill);
+    throw new Error(e.name === "AbortError" ? "Request timed out — check your connection" : e.message);
+  }
+  clearTimeout(kill);
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail; } catch (e) { /* keep statusText */ }
@@ -146,20 +156,35 @@ function drawBoard(cv, board, opts = {}) {
 /* Real-time-paced throw animation. traj.dt = sim seconds per frame. */
 function animateTraj(cv, traj, finalBoard, rate) {
   return new Promise((resolve) => {
-    const finish = () => { if (finalBoard) drawBoard(cv, finalBoard, {}); resolve(); };
+    let done = false, watchdog = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(watchdog);
+      try { if (finalBoard) drawBoard(cv, finalBoard, {}); } catch (e) { /* draw-only */ }
+      resolve();
+    };
     if (!traj || !traj.frames || traj.frames.length < 2) { finish(); return; }
     const frames = traj.frames, dt = traj.dt || 0.1;
+    const durMs = (frames.length * dt / rate) * 1000;
+    // the promise MUST settle even if rAF stalls (hidden tab, throttling, a
+    // rendering exception) — a stuck animation used to freeze "Throwing…"
+    watchdog = setTimeout(finish, durMs + 3000);
     const t0 = performance.now();
     const tick = (now) => {
-      const idx = Math.floor(((now - t0) / 1000) * rate / dt);
-      const f = frames[Math.min(idx, frames.length - 1)];
-      const stones = [];
-      for (let slot = 0; slot < f.length; slot++) {
-        const p = f[slot];
-        if (p && p[0] != null) stones.push({ slot, team: slot < 6 ? "A" : "B", along: p[0], lateral: p[1] });
-      }
-      drawBoard(cv, stones, {});
-      if (idx >= frames.length + 2) finish();
+      if (done) return;
+      try {
+        const idx = Math.floor(((now - t0) / 1000) * rate / dt);
+        const f = frames[Math.min(idx, frames.length - 1)];
+        const stones = [];
+        for (let slot = 0; slot < f.length; slot++) {
+          const p = f[slot];
+          if (p && p[0] != null) stones.push({ slot, team: slot < 6 ? "A" : "B", along: p[0], lateral: p[1] });
+        }
+        drawBoard(cv, stones, {});
+        if (idx >= frames.length + 2) { finish(); return; }
+      } catch (e) { finish(); return; }
+      if (document.hidden) setTimeout(() => tick(performance.now()), 120);
       else requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -374,8 +399,7 @@ async function doThrow() {
     if (d.match.status === "finished") matchOver();
     else maybePowerPlay();
   } catch (e) { toast(e.message, 4200); }
-  S.busy = false; $("busy").classList.add("hidden");
-  renderGame();
+  finally { S.busy = false; $("busy").classList.add("hidden"); renderGame(); }
 }
 async function doPreview() {
   try {
@@ -429,7 +453,7 @@ async function championIfOnTurn() {
       if (d.match.status === "finished") matchOver();
       else maybePowerPlay();
     } catch (e) { if (!/not on turn/.test(e.message)) toast(e.message); }
-    S.busy = false; $("busy").classList.add("hidden"); renderGame();
+    finally { S.busy = false; $("busy").classList.add("hidden"); renderGame(); }
   }
 }
 async function choosePP(wing) {

@@ -1,5 +1,5 @@
 /* Curling Arena service worker: cache the app shell; API always from network. */
-const VERSION = "arena-v2.1.2";
+const VERSION = "arena-v2.1.3";
 const SHELL = ["/", "/static/style_v2.css", "/static/app_v2.js",
                "/static/icons/icon-192.png", "/manifest.webmanifest"];
 
@@ -11,9 +11,12 @@ self.addEventListener("activate", (e) => {
     Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))
   ).then(() => self.clients.claim()));
 });
+const CODE = ["/", "/static/app_v2.js", "/static/style_v2.css"];
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.pathname.startsWith("/api/")) return;  // network
+  const isCode = CODE.includes(url.pathname);
   e.respondWith(
     caches.match(e.request).then((hit) => {
       const fetched = fetch(e.request).then((resp) => {
@@ -23,7 +26,9 @@ self.addEventListener("fetch", (e) => {
         }
         return resp;
       }).catch(() => hit);
-      return hit || fetched;
+      // code shell: network-first (stale cached clients caused desktop bugs);
+      // icons/assets: cache-first
+      return isCode ? fetched : (hit || fetched);
     })
   );
 });
