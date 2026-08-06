@@ -50,6 +50,7 @@ class NewMatch(BaseModel):
     noise: bool = Field(default=True, description="realize throws under execution noise (eval protocol)")
     first_hammer: str = Field(default="random", description='"A" | "B" | "random"')
     seed: Optional[int] = None
+    mode: Optional[str] = None
 
 
 class ShotRequest(BaseModel):
@@ -68,6 +69,10 @@ class ShotRequest(BaseModel):
 class PowerPlay(BaseModel):
     side: str
     wing: str = Field(description='"left" | "right"')
+
+
+class ClaimBody(BaseModel):
+    token: str = Field(min_length=6, max_length=64)
 
 
 # --------------------------------------------------------------------------- #
@@ -146,7 +151,7 @@ def create_match(body: NewMatch):
     for side, kind in body.players.items():
         if side not in ("A", "B") or kind not in ("human", "agent", "champion"):
             raise HTTPException(422, f"bad players entry {side}:{kind}")
-    m = Match.create(body.players, ends=body.ends, noise=body.noise,
+    m = Match.create(body.players, ends=body.ends, noise=body.noise, mode=body.mode,
                      first_hammer=body.first_hammer, seed=body.seed, labels=body.labels)
     replies = m.auto_play() if "champion" in m.data["players"].values() else []
     return {"match": m.to_dict(), "text": m.text_state(),
@@ -260,6 +265,16 @@ def champion_move(mid: str):
         raise HTTPException(409, "the champion is not on turn")
     return {"result": replies[0], "replies": replies[1:],
             "match": m.to_dict(), "text": m.text_state()}
+
+
+@app.post("/api/match/{mid}/claim")
+def claim_seat(mid: str, body: ClaimBody):
+    """Online play: claim a human seat (per-tab token; idempotent). side=None
+    means both seats are taken — the caller is a spectator."""
+    m = _match(mid)
+    side = m.claim_seat(body.token)
+    return {"side": side, "spectator": side is None,
+            "seats_taken": sorted((m.data.get("claims") or {}).keys())}
 
 
 @app.get("/api/match/{mid}/replay")

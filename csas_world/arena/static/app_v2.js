@@ -61,16 +61,25 @@ function mkMap(cv) {
   };
 }
 function heatColor(v, lo, mid, hi) {
+  // diverging around the median spot value: blue = better, red = worse.
+  // Near-median cells stay almost transparent so only real signal colors the ice.
   let t;
-  if (v >= mid) { t = hi > mid ? Math.min(1, (v - mid) / (hi - mid)) : 0;
-    return `rgba(${61 + (1 - t) * 80},${127 + (1 - t) * 20},${195},${0.14 + 0.34 * t})`; }
+  if (v >= mid) {
+    t = hi > mid ? Math.min(1, (v - mid) / (hi - mid)) : 0;
+    return `rgba(23,111,208,${0.06 + 0.66 * t})`;
+  }
   t = mid > lo ? Math.min(1, (mid - v) / (mid - lo)) : 0;
-  return `rgba(${195},${61 + (1 - t) * 80},${61 + (1 - t) * 80},${0.14 + 0.34 * t})`;
+  return `rgba(198,44,34,${0.06 + 0.66 * t})`;
 }
 function drawBoard(cv, board, opts = {}) {
   const ctx = setupCanvas(cv), m = mkMap(cv);
   const w = cv.clientWidth, h = parseFloat(cv.style.height);
   ctx.fillStyle = "#eef4fa"; ctx.fillRect(0, 0, w, h);
+  for (const [r, col] of RINGS) {
+    ctx.beginPath(); ctx.arc(m.px(0), m.py(0), r * m.ppm, 0, 2 * Math.PI);
+    ctx.fillStyle = col; ctx.globalAlpha = opts.heat ? 0.35 : 0.9; ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   if (opts.heat) {
     const { alongs, lats, v } = opts.heat;
     const vals = v.flat().filter((x) => x != null).sort((a, b) => a - b);
@@ -86,11 +95,6 @@ function drawBoard(cv, board, opts = {}) {
           ctx.fillRect(m.px(lats[li]) - cl / 2, m.py(alongs[ai]) - ca / 2, cl + 0.5, ca + 0.5);
         }
     }
-  }
-  for (const [r, col] of RINGS) {
-    ctx.beginPath(); ctx.arc(m.px(0), m.py(0), r * m.ppm, 0, 2 * Math.PI);
-    ctx.fillStyle = col; ctx.globalAlpha = opts.heat ? 0.55 : 0.9; ctx.fill();
-    ctx.globalAlpha = 1;
   }
   ctx.strokeStyle = "rgba(40,70,110,.25)"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(m.px(0), 0); ctx.lineTo(m.px(0), h); ctx.stroke();
@@ -200,12 +204,21 @@ async function loadMatches() {
   } catch (e) { $("matchList").innerHTML = `<p class="hint">${e.message}</p>`; }
 }
 
+function tabToken() {
+  if (!sessionStorage.arenaTok)
+    sessionStorage.arenaTok = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return sessionStorage.arenaTok;
+}
+async function claimSeat(mid) {
+  // per-TAB token via sessionStorage (localStorage is shared across tabs and
+  // caused both players landing on the same color); server assigns the seat.
+  const d = await api(`/api/match/${mid}/claim`, { method: "POST", body: { token: tabToken() } });
+  return d.side;   // null => spectator
+}
 function sidesFor(match) {
-  // which sides does THIS device control?
   const humans = Object.keys(match.players).filter((s) => match.players[s] === "human");
   if (humans.length <= 1) return new Set(humans);
-  const claimed = localStorage["side_" + match.id];
-  return claimed ? new Set([claimed]) : new Set(humans);   // hot-seat = both
+  return new Set(humans);   // hot-seat default: this device controls both
 }
 
 async function newMatch(kind) {
@@ -213,16 +226,17 @@ async function newMatch(kind) {
     const players = kind === "champ" ? { A: "human", B: "champion" } : { A: "human", B: "human" };
     const labels = kind === "champ" ? { A: "You", B: "Champion" } : { A: "Red", B: "Yellow" };
     const d = await api("/api/match", { method: "POST", body: {
-      players, labels, ends: S.ends, first_hammer: "random" } });
+      players, labels, ends: S.ends, first_hammer: "random", mode: kind } });
     S.match = d.match;
     S.online = kind === "online";
     if (kind === "online") {
-      localStorage["side_" + d.match.id] = "A";
-      const link = `${location.origin}/join/${d.match.id}`;
-      $("shareLink").value = link;
+      const side = await claimSeat(d.match.id);        // creator -> "A"
+      S.mySides = new Set(side ? [side] : []);
+      $("shareLink").value = `${location.origin}/join/${d.match.id}`;
       $("shareModal").classList.remove("hidden");
+    } else {
+      S.mySides = sidesFor(d.match);
     }
-    S.mySides = sidesFor(d.match);
     S.seenThrows = countThrows(d.match);
     resetShot(); show("game"); renderGame();
     maybePowerPlay();
@@ -234,23 +248,29 @@ async function resumeMatch(mid) {
     const d = await api(`/api/match/${mid}`);
     S.match = d.match;
     const humans = Object.values(d.match.players).filter((p) => p === "human").length;
-    S.online = humans === 2 && !!localStorage["side_" + mid];
-    S.mySides = sidesFor(d.match);
+    S.online = humans === 2 && d.match.mp_mode === "online";
+    if (S.online) {
+      const side = await claimSeat(mid);
+      S.mySides = new Set(side ? [side] : []);
+      if (!side) toast("Both seats taken — watching live", 3200);
+    } else {
+      S.mySides = sidesFor(d.match);
+    }
     S.seenThrows = countThrows(d.match);
     resetShot(); show("game"); renderGame(); maybePowerPlay();
-    if (humans === 2) startPolling();
+    if (S.online) startPolling();
   } catch (e) { toast(e.message); }
 }
 async function joinFromLink(mid) {
   try {
     const d = await api(`/api/match/${mid}`);
-    if (!localStorage["side_" + mid]) localStorage["side_" + mid] = "B";
     history.replaceState(null, "", "/");
     S.match = d.match; S.online = true;
-    S.mySides = sidesFor(d.match);
+    const side = await claimSeat(mid);
+    S.mySides = new Set(side ? [side] : []);
     S.seenThrows = countThrows(d.match);
     resetShot(); show("game"); renderGame(); maybePowerPlay(); startPolling();
-    toast(`You are ${TEAM_NAME[[...S.mySides][0]]} — good curling!`, 3600);
+    toast(side ? `You are ${TEAM_NAME[side]} — good curling!` : "Both seats taken — watching live", 3600);
   } catch (e) { toast("Couldn't join: " + e.message, 4000); show("home"); }
 }
 
@@ -302,7 +322,7 @@ function updateShotUI() {
      (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget)));
   $("throwBtn").disabled = !ready;
   $("previewBtn").classList.toggle("hidden", !(S.coach && ready));
-  $("hint").textContent = !my ? (S.match.status === "finished" ? "" : "Waiting for the other team…")
+  $("hint").textContent = !my ? (S.match.status === "finished" ? "" : (S.online && S.mySides.size === 0 ? "Watching live…" : "Waiting for the other team…"))
     : S.mode === "draw" ? (S.target ? "Target set — Throw when ready." : "Tap the ice where the stone should stop.")
     : S.hitSlot == null ? "Tap a stone on the board."
     : S.hitAct === "remove" ? "Take-out selected — Throw when ready."

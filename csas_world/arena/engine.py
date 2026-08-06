@@ -205,7 +205,7 @@ class Match:
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def create(cls, players: Dict[str, str], ends: int = 8, noise: bool = True,
+    def create(cls, players: Dict[str, str], ends: int = 8, noise: bool = True, mode: Optional[str] = None,
                first_hammer: str = "random", seed: Optional[int] = None,
                labels: Optional[Dict[str, str]] = None) -> "Match":
         mid = uuid.uuid4().hex[:12]
@@ -216,7 +216,7 @@ class Match:
             "id": mid, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "players": {"A": players.get("A", "human"), "B": players.get("B", "champion")},
             "labels": labels or {}, "ends_scheduled": int(ends), "noise": bool(noise),
-            "seed": seed, "status": "in_progress", "winner": None,
+            "seed": seed, "status": "in_progress", "mp_mode": mode, "winner": None,
             "totals": {"A": 0, "B": 0},
             "power_play_used": {"A": False, "B": False},
             "champion": {"ckpt": DEFAULT_CKPT, "n_candidates": CHAMPION_CANDIDATES,
@@ -259,6 +259,22 @@ class Match:
         return n
 
     # ------------------------------------------------------------------ #
+    def claim_seat(self, token: str) -> Optional[str]:
+        """Server-side seat claiming for online play: first free human side goes
+        to this token; idempotent per token (rejoin returns the same side); None
+        when both seats are taken (spectator)."""
+        claims = self.data.setdefault("claims", {})
+        for s, tk in claims.items():
+            if tk == token:
+                return s
+        free = [s for s in ("A", "B")
+                if self.data["players"].get(s) == "human" and s not in claims]
+        if not free:
+            return None
+        claims[free[0]] = token
+        self.save()
+        return free[0]
+
     def set_power_play(self, team: str, wing: str) -> None:
         e = self.cur_end
         if self.data["status"] != "in_progress":
@@ -441,6 +457,7 @@ class Match:
     # ------------------------------------------------------------------ #
     def to_dict(self, include_history: bool = True) -> Dict[str, Any]:
         d = json.loads(json.dumps(self.data))  # deep copy of plain data
+        d["seats_taken"] = sorted((d.pop("claims", None) or {}).keys())
         e = d["ends"][-1]
         d["board"] = stones_from_state(np.asarray(e["state"], dtype=np.float32))
         d["turn"] = {

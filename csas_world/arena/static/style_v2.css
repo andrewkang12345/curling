@@ -89,7 +89,7 @@ canvas.board {
 .heatlegend { display: flex; align-items: center; gap: 8px; margin-top: 6px;
   color: var(--muted); font-size: 12.5px; }
 .heatlegend .bar { flex: 1; height: 10px; border-radius: 5px;
-  background: linear-gradient(90deg, #c33d3d, #8a8a88, #3d7fc3); }
+  background: linear-gradient(90deg, rgba(198,44,34,.85), rgba(150,150,148,.25), rgba(23,111,208,.85)); }
 .shotbar { margin-top: 12px; }
 .moderow { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .actionrow { display: flex; gap: 10px; align-items: center; }
