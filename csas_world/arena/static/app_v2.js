@@ -12,7 +12,7 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {},
 };
-const APP_VERSION = "2.1.7";
+const APP_VERSION = "2.1.8";
 const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
 const REPLAY_RATE = 6;
 const _tele = [];
@@ -215,8 +215,10 @@ function animateTraj(cv, traj, finalBoard, rate) {
     const tick = (now) => {
       if (done) return;
       try {
-        const idx = Math.floor(((now - t0) / 1000) * simRate / dt);
-        const f = frames[Math.min(idx, frames.length - 1)];
+        // Safari's rAF timestamp can PRECEDE a performance.now() captured in the
+        // same frame -> negative idx -> frames[-1] undefined -> instant finish.
+        const idx = Math.max(0, Math.floor(((now - t0) / 1000) * simRate / dt));
+        const f = frames[Math.min(idx, frames.length - 1)] || frames[0];
         const stones = [];
         for (let slot = 0; slot < f.length; slot++) {
           const p = f[slot];
