@@ -12,9 +12,20 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {},
 };
-const APP_VERSION = "2.1.6";
-const PLAY_SECS = 2.8;        // every throw's VISIBLE flight is paced to ~this many seconds
-const REPLAY_SECS = 2.2;
+const APP_VERSION = "2.1.7";
+const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
+const REPLAY_RATE = 6;
+const _tele = [];
+function tele(ev) {
+  ev.t = Date.now(); ev.v = APP_VERSION; ev.ua = (navigator.userAgent || "").slice(0, 80);
+  _tele.push(ev);
+  console.log("[anim]", JSON.stringify(ev));
+  if (_tele.length >= 4) {
+    const batch = _tele.splice(0);
+    fetch("/api/client_log", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ events: batch }) }).catch(() => {});
+  }
+}
 let _busyTimer = null, _busyT0 = 0, _busyLabel = "";
 function busyShow(label) {
   _busyLabel = label; _busyT0 = Date.now();
@@ -169,18 +180,21 @@ function drawBoard(cv, board, opts = {}) {
 /* Real-time-paced throw animation. traj.dt = sim seconds per frame. */
 function animateTraj(cv, traj, finalBoard, rate) {
   return new Promise((resolve) => {
-    let done = false, watchdog = null;
-    const finish = () => {
+    let done = false, watchdog = null, frames = null, animT0 = 0, ticks = 0;
+    const finish = (why) => {
       if (done) return;
       done = true;
       clearTimeout(watchdog);
       try { if (finalBoard) drawBoard(cv, finalBoard, {}); } catch (e) { /* draw-only */ }
+      if (traj && traj.frames)
+        tele({ ev: "anim", slot: traj.stone_slot, nAll: traj.frames.length,
+               nVis: frames ? frames.length : -1, ticks,
+               ms: Math.round(performance.now() - (animT0 || performance.now())), why: why || "?" });
       resolve();
     };
-    if (!traj || !traj.frames || traj.frames.length < 2) { finish(); return; }
-    let frames = traj.frames;
+    if (!traj || !traj.frames || traj.frames.length < 2) { finish("no-traj"); return; }
+    frames = traj.frames;
     const dt = traj.dt || 0.1;
-    const targetSecs = rate || PLAY_SECS;
     // a draw spends its first seconds far above the visible view — skip ahead
     // to just before the thrown stone enters the board so motion is visible
     const slot = traj.stone_slot;
@@ -191,14 +205,12 @@ function animateTraj(cv, traj, finalBoard, rate) {
       });
       if (first > 3) frames = frames.slice(first - 3);
     }
-    // ADAPTIVE pacing: a take-out crosses the view in ~2 s of sim time while a
-    // draw crawls for ~10 s — a fixed rate made hits look instant. Normalize the
-    // visible flight to targetSecs (rate clamped so nothing looks absurd).
-    const simRate = Math.max(1.2, Math.min(9, (frames.length * dt) / targetSecs));
+    const simRate = rate || PLAY_RATE;
     const durMs = (frames.length * dt / simRate) * 1000;
+    animT0 = performance.now();
     // the promise MUST settle even if rAF stalls (hidden tab, throttling, a
     // rendering exception) — a stuck animation used to freeze "Throwing…"
-    watchdog = setTimeout(finish, durMs + 3000);
+    watchdog = setTimeout(() => finish("watchdog"), durMs + 3000);
     const t0 = performance.now();
     const tick = (now) => {
       if (done) return;
@@ -211,15 +223,16 @@ function animateTraj(cv, traj, finalBoard, rate) {
           if (p && p[0] != null) stones.push({ slot, team: slot < 6 ? "A" : "B", along: p[0], lateral: p[1] });
         }
         drawBoard(cv, stones, {});
-        if (idx >= frames.length + 2) { finish(); return; }
-      } catch (e) { finish(); return; }
+        ticks++;
+        if (idx >= frames.length + 2) { finish("complete"); return; }
+      } catch (e) { finish("draw-error:" + (e && e.message ? e.message.slice(0, 60) : "?")); return; }
       if (document.hidden) setTimeout(() => tick(performance.now()), 120);
       else requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   });
 }
-function animateThrow(cv, result, rate = PLAY_SECS) {
+function animateThrow(cv, result, rate = PLAY_RATE) {
   return animateTraj(cv, result?.trajectory, result?.board, rate);
 }
 
@@ -524,7 +537,7 @@ async function pollOnce() {
         for (const r of recs.slice(S.seenThrows)) {
           try {
             const tt = await api(`/api/match/${S.match.id}/throw_traj?end=${r.end}&n=${r.n}`);
-            await animateTraj($("board"), tt.trajectory, tt.board, PLAY_SECS);
+            await animateTraj($("board"), tt.trajectory, tt.board, PLAY_RATE);
           } catch (err) { /* skip animation, still update */ }
         }
         S.seenThrows = newCount;
@@ -597,7 +610,7 @@ async function renderStep(animate = false) {
   $("rHeatLegend").classList.toggle("hidden", !(S.rHeatOn && heat));
   if (animate && !S.rHeatOn) {
     drawBoard($("rboard"), st.board_before, {});
-    await animateTraj($("rboard"), st.traj, st.board_after, REPLAY_SECS);
+    await animateTraj($("rboard"), st.traj, st.board_after, REPLAY_RATE);
   } else if (S.rHeatOn && heat) {
     // coach view: the board BEFORE the throw + where the next stone should go
     drawBoard($("rboard"), st.board_before, { heat, traj: st.traj });

@@ -327,6 +327,22 @@ def one_throw_traj(mid: str, end: int, n: int):
     return out
 
 
+class ClientLog(BaseModel):
+    events: List[Dict[str, Any]] = Field(max_length=50)
+
+
+@app.post("/api/client_log")
+def client_log(body: ClientLog):
+    """Anonymous client-side diagnostics (animation telemetry) for debugging
+    device-specific rendering issues. Appended to arena/client_log.jsonl."""
+    import json as _json
+    with open(_HERE / "client_log.jsonl", "a") as fh:
+        for ev in body.events[:50]:
+            ev["server_time"] = time.time()
+            fh.write(_json.dumps(ev) + "\n")
+    return {"ok": True}
+
+
 # --------------------------------------------------------------------------- #
 # Static UI
 # --------------------------------------------------------------------------- #
