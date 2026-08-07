@@ -1,5 +1,5 @@
 /* Curling Arena service worker: cache the app shell; API always from network. */
-const VERSION = "arena-v2.1.4";
+const VERSION = "arena-v2.1.5";
 const SHELL = ["/", "/static/style_v2.css", "/static/app_v2.js",
                "/static/icons/icon-192.png", "/manifest.webmanifest"];
 

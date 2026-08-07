@@ -12,7 +12,7 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {},
 };
-const APP_VERSION = "2.1.4";
+const APP_VERSION = "2.1.5";
 const PLAY_RATE = 5;          // sim-seconds per real-second (real throw ≈ 24 s → ≈ 5 s)
 let _busyTimer = null, _busyT0 = 0, _busyLabel = "";
 function busyShow(label) {
@@ -178,7 +178,18 @@ function animateTraj(cv, traj, finalBoard, rate) {
       resolve();
     };
     if (!traj || !traj.frames || traj.frames.length < 2) { finish(); return; }
-    const frames = traj.frames, dt = traj.dt || 0.1;
+    let frames = traj.frames;
+    const dt = traj.dt || 0.1;
+    // a draw spends its first seconds far above the visible view — skip ahead
+    // to just before the thrown stone enters the board so motion is visible
+    const slot = traj.stone_slot;
+    if (slot != null) {
+      const first = frames.findIndex((f) => {
+        const p = f[slot];
+        return p && p[0] != null && p[0] > VIEW.alongTop - 0.8;
+      });
+      if (first > 3) frames = frames.slice(first - 3);
+    }
     const durMs = (frames.length * dt / rate) * 1000;
     // the promise MUST settle even if rAF stalls (hidden tab, throttling, a
     // rendering exception) — a stuck animation used to freeze "Throwing…"
@@ -400,9 +411,10 @@ async function doThrow() {
   S.busy = true; busyShow("Throwing…");
   try {
     const d = await api(`/api/match/${S.match.id}/throw`, { method: "POST", body: shotBody(false) });
+    busyHide();                                  // overlay only while waiting, never over motion
     await animateThrow($("board"), d.result);
     for (const rep of d.replies || []) {
-      busyShow("Champion is thinking…");
+      toast(\`\${S.match.labels?.B || "Champion"} replies…\`, 1400);
       await animateThrow($("board"), rep);
       if (rep.end_result) announceEnd(rep.end_result);
     }
@@ -458,6 +470,7 @@ async function championIfOnTurn() {
     S.busy = true; busyShow("Champion is thinking…");
     try {
       const d = await api(`/api/match/${m.id}/champion_move`, { method: "POST", body: {} });
+      busyHide();
       await animateThrow($("board"), d.result);
       for (const rep of d.replies || []) await animateThrow($("board"), rep);
       if (d.result?.end_result) announceEnd(d.result.end_result);
@@ -499,7 +512,7 @@ async function pollOnce() {
     if (newCount > S.seenThrows) {
       S.busy = true;
       try {
-        busyShow("Opponent throwing…");
+        toast("Opponent throwing…", 1400);
         const recs = [];
         for (const e of d.match.ends)
           for (const r of e.throws || []) recs.push(r);
@@ -676,4 +689,5 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
   console.log("Curling Arena client v" + APP_VERSION);
+  const vl = $("verline"); if (vl) vl.textContent = "v" + APP_VERSION;
 });
