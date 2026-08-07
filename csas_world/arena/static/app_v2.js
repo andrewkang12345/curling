@@ -414,7 +414,7 @@ async function doThrow() {
     busyHide();                                  // overlay only while waiting, never over motion
     await animateThrow($("board"), d.result);
     for (const rep of d.replies || []) {
-      toast(\`\${S.match.labels?.B || "Champion"} replies…\`, 1400);
+      toast((S.match.labels?.B || "Champion") + " replies…", 1400);
       await animateThrow($("board"), rep);
       if (rep.end_result) announceEnd(rep.end_result);
     }
