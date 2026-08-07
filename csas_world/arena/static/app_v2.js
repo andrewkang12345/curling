@@ -12,7 +12,20 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {},
 };
+const APP_VERSION = "2.1.4";
 const PLAY_RATE = 5;          // sim-seconds per real-second (real throw ≈ 24 s → ≈ 5 s)
+let _busyTimer = null, _busyT0 = 0, _busyLabel = "";
+function busyShow(label) {
+  _busyLabel = label; _busyT0 = Date.now();
+  const el = $("busy");
+  el.textContent = label; el.classList.remove("hidden");
+  clearInterval(_busyTimer);
+  _busyTimer = setInterval(() => {
+    const s = Math.round((Date.now() - _busyT0) / 1000);
+    if (s >= 4) el.textContent = `${_busyLabel} ${s}s`;
+  }, 1000);
+}
+function busyHide() { clearInterval(_busyTimer); _busyTimer = null; $("busy").classList.add("hidden"); }
 const REPLAY_RATE = 7;
 
 /* ---------------- api ---------------- */
@@ -71,15 +84,15 @@ function mkMap(cv) {
   };
 }
 function heatColor(v, lo, mid, hi) {
-  // diverging around the median spot value: blue = better, red = worse.
+  // diverging around the median spot value: RED = better (hot), BLUE = worse (cold).
   // Near-median cells stay almost transparent so only real signal colors the ice.
   let t;
   if (v >= mid) {
     t = hi > mid ? Math.min(1, (v - mid) / (hi - mid)) : 0;
-    return `rgba(23,111,208,${0.06 + 0.66 * t})`;
+    return `rgba(198,44,34,${0.06 + 0.66 * t})`;
   }
   t = mid > lo ? Math.min(1, (mid - v) / (mid - lo)) : 0;
-  return `rgba(198,44,34,${0.06 + 0.66 * t})`;
+  return `rgba(23,111,208,${0.06 + 0.66 * t})`;
 }
 function drawBoard(cv, board, opts = {}) {
   const ctx = setupCanvas(cv), m = mkMap(cv);
@@ -384,12 +397,12 @@ function shotBody(preview) {
 
 async function doThrow() {
   if (S.busy) return;
-  S.busy = true; $("busy").classList.remove("hidden"); $("busy").textContent = "Throwing…";
+  S.busy = true; busyShow("Throwing…");
   try {
     const d = await api(`/api/match/${S.match.id}/throw`, { method: "POST", body: shotBody(false) });
     await animateThrow($("board"), d.result);
     for (const rep of d.replies || []) {
-      $("busy").textContent = "Champion is thinking…";
+      busyShow("Champion is thinking…");
       await animateThrow($("board"), rep);
       if (rep.end_result) announceEnd(rep.end_result);
     }
@@ -399,7 +412,7 @@ async function doThrow() {
     if (d.match.status === "finished") matchOver();
     else maybePowerPlay();
   } catch (e) { toast(e.message, 4200); }
-  finally { S.busy = false; $("busy").classList.add("hidden"); renderGame(); }
+  finally { S.busy = false; busyHide(); renderGame(); }
 }
 async function doPreview() {
   try {
@@ -442,7 +455,7 @@ async function maybePowerPlay() {
 async function championIfOnTurn() {
   const m = S.match;
   if (m.status === "in_progress" && m.players[m.turn.team] === "champion") {
-    S.busy = true; $("busy").classList.remove("hidden"); $("busy").textContent = "Champion is thinking…";
+    S.busy = true; busyShow("Champion is thinking…");
     try {
       const d = await api(`/api/match/${m.id}/champion_move`, { method: "POST", body: {} });
       await animateThrow($("board"), d.result);
@@ -453,7 +466,7 @@ async function championIfOnTurn() {
       if (d.match.status === "finished") matchOver();
       else maybePowerPlay();
     } catch (e) { if (!/not on turn/.test(e.message)) toast(e.message); }
-    finally { S.busy = false; $("busy").classList.add("hidden"); renderGame(); }
+    finally { S.busy = false; busyHide(); renderGame(); }
   }
 }
 async function choosePP(wing) {
@@ -481,26 +494,29 @@ async function pollOnce() {
   if (!S.match || S.busy || S.view !== "game") return;
   if (humanOnTurn()) return;                    // it's our move; nothing to fetch
   try {
-    const d = await api(`/api/match/${S.match.id}`);
+    const d = await api(`/api/match/${S.match.id}`, { timeoutMs: 8000 });
     const newCount = countThrows(d.match);
     if (newCount > S.seenThrows) {
       S.busy = true;
-      // animate each unseen throw in order
-      const recs = [];
-      for (const e of d.match.ends)
-        for (const r of e.throws || []) recs.push(r);
-      for (const r of recs.slice(S.seenThrows)) {
-        try {
-          const tt = await api(`/api/match/${S.match.id}/throw_traj?end=${r.end}&n=${r.n}`);
-          await animateTraj($("board"), tt.trajectory, tt.board, PLAY_RATE);
-        } catch (err) { /* skip animation, still update */ }
+      try {
+        busyShow("Opponent throwing…");
+        const recs = [];
+        for (const e of d.match.ends)
+          for (const r of e.throws || []) recs.push(r);
+        for (const r of recs.slice(S.seenThrows)) {
+          try {
+            const tt = await api(`/api/match/${S.match.id}/throw_traj?end=${r.end}&n=${r.n}`);
+            await animateTraj($("board"), tt.trajectory, tt.board, PLAY_RATE);
+          } catch (err) { /* skip animation, still update */ }
+        }
+        S.seenThrows = newCount;
+        S.match = d.match; resetShot(); renderGame();
+        if (d.match.status === "finished") matchOver();
+        else maybePowerPlay();
+      } finally {
+        S.busy = false;                          // a stuck busy here used to kill the UI
+        busyHide();
       }
-      S.seenThrows = newCount;
-      S.match = d.match; resetShot(); renderGame();
-      for (const e of d.match.ends) if (e.score && e.throws?.length === 0) { /* noop */ }
-      if (d.match.status === "finished") matchOver();
-      else maybePowerPlay();
-      S.busy = false;
     } else {
       S.match = d.match; renderGame();
     }
@@ -649,5 +665,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const joinMatch = location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
   if (joinMatch) joinFromLink(joinMatch[1]);
   else show("home");
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    // when a new version activates, reload once so stale clients can't linger
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (sessionStorage.swReloaded) return;
+      sessionStorage.swReloaded = "1";
+      toast("Updating to the latest version…", 1500);
+      setTimeout(() => location.reload(), 600);
+    });
+  }
+  console.log("Curling Arena client v" + APP_VERSION);
 });
