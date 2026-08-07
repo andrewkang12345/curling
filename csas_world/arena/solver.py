@@ -31,7 +31,17 @@ import numpy as np
 from world import env_bridge
 from world.actions import ACTION_HIGH, ACTION_LOW, clip_raw
 
-from .engine import NUM_STONES, POS_MAX, SIM_LOCK, live_slots
+from .engine import DEFAULT_NOISE_CFG, NUM_STONES, POS_MAX, SIM_LOCK, live_slots
+
+_NOISE = None
+
+
+def _noise():
+    global _NOISE
+    if _NOISE is None:
+        from world.search.noise import make_noise
+        _NOISE = make_noise(DEFAULT_NOISE_CFG, seed=712)
+    return _NOISE
 
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 
@@ -339,19 +349,47 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
         l = np.where(gone, 8.0, np.linalg.norm(f_safe - tgt[None], axis=1))
         return l + np.where(~gone & (moved < 0.05), 2.0, 0.0)
 
-    posts = _simulate_real(x, c, cands)
-    losses = loss(posts)
+    # NOISE-ROBUST objective: contact shots amplify execution noise (millimetres
+    # at contact swing the victim's exit line), so score every candidate by its
+    # MEAN loss over K CRN noise realizations, not its noiseless outcome.
+    K_NOISE = 8
+
+    def robust_loss_batch(actions):
+        realized = _noise().sample_batch(np.asarray(actions, np.float32), K_NOISE,
+                                         crn=True).reshape(-1, 4)
+        posts_ = _simulate_real(x, c, realized)
+        return loss(posts_).reshape(len(actions), K_NOISE).mean(axis=1)
+
+    losses = robust_loss_batch(cands)
     seed_a = cands[int(np.argmin(losses))]
-    a, l = _cem_refine(x, c, seed_a, loss, iters=3, pop=96,
-                       rng=np.random.default_rng(seed))
+
+    # CEM over the robust objective (action-space; sims batched pop*K on GPU)
+    rng_ = np.random.default_rng(seed)
+    mu, sigma = seed_a.copy(), np.asarray([0.06, 0.012, 3.0, 0.06], np.float32)
+    best_a, best_l = seed_a, float(losses.min())
+    for _ in range(4):
+        pop_a = clip_raw(mu[None] + rng_.standard_normal((96, 4)).astype(np.float32) * sigma)
+        pop_a[0] = best_a
+        pl = robust_loss_batch(pop_a)
+        order = np.argsort(pl)
+        if pl[order[0]] < best_l:
+            best_l, best_a = float(pl[order[0]]), pop_a[int(order[0])]
+        elite = pop_a[order[:10]]
+        mu = elite.mean(axis=0)
+        sigma = 0.6 * sigma + 0.4 * elite.std(axis=0)
+    a, l = best_a, best_l
     final = _final_compact(_simulate_real(x, c, a[None]), int(stone_slot))[0]
     final_desc = "removed" if not np.isfinite(final).all() else \
         [round(float(final[0]), 3), round(float(final[1]), 3)]
     info: Dict[str, Any] = {"stone_slot": int(stone_slot), "stone_final": final_desc}
     if remove:
-        info.update({"removed": bool(l < 0.9), "loss": round(float(l), 3)})
+        # l = mean removal loss over noise draws; <0.5 ~ removes in most worlds
+        info.update({"removed": bool(l < 0.5), "removal_reliability": round(1.0 - min(float(l), 1.0), 2),
+                     "loss": round(float(l), 3)})
     else:
-        info.update({"achieved_error_m": round(float(l), 3),
+        noiseless = float(loss(_simulate_real(x, c, a[None]))[0])
+        info.update({"achieved_error_m": round(noiseless, 3),
+                     "expected_error_m": round(float(l), 3),
                      "target": [float(t) for t in tgt]})
     return a, info
 

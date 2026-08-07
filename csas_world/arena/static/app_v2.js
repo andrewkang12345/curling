@@ -12,7 +12,7 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {}, pendingAdvance: null,
 };
-const APP_VERSION = "2.2.2";
+const APP_VERSION = "2.2.3";
 const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
 const REPLAY_RATE = 6;
 const _tele = [];
@@ -442,14 +442,17 @@ async function autoPreviewHit() {
     S.solved = d;
     renderGame();
     if (S.hitAct === "remove") {
-      $("hint").textContent = d.solver?.removed === false
-        ? "⚠️ Hard to remove from here — it may survive. Throw anyway or pick another stone."
-        : "Looks good — the stone comes out. Throw when ready.";
+      const rel = d.solver?.removal_reliability;
+      $("hint").textContent = rel != null && rel < 0.6
+        ? `⚠️ Risky from here — removes it only ~${Math.round(rel * 100)}% of the time. Throw anyway or pick another stone.`
+        : rel != null ? `Good angle — removes it ~${Math.round(rel * 100)}% of the time. Throw when ready.`
+        : "Looks good — Throw when ready.";
     } else {
-      const err = d.solver?.achieved_error_m;
+      // expected error INCLUDES execution noise — the honest number for a tap
+      const err = d.solver?.expected_error_m ?? d.solver?.achieved_error_m;
       $("hint").textContent = err == null ? "Ready — Throw when ready."
-        : err > 0.8 ? `⚠️ That spot is hard to reach — it would land ~${err.toFixed(1)} m away (see outline). Adjust or throw anyway.`
-        : `It would land ~${Math.round(err * 100)} cm from your spot (see outline). Throw when ready.`;
+        : err > 0.9 ? `⚠️ Hard from here — it typically ends ~${err.toFixed(1)} m from that spot. Adjust or throw anyway.`
+        : `It typically ends ~${Math.round(err * 100)} cm from your spot (throws vary — same for the champion). Throw when ready.`;
     }
     $("throwBtn").disabled = !humanOnTurn();
   } catch (e) {
