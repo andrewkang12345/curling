@@ -62,6 +62,9 @@ ap.add_argument("--num-shards", type=int, default=1)
 ap.add_argument("--shard-id", type=int, default=0)
 ap.add_argument("--seed", type=int, default=66)
 ap.add_argument("--ref-fast", action="store_true", help="tiny reference for smoke tests")
+ap.add_argument("--state-subset", type=int, default=0, help="tree/adjudicate: use only sid < N")
+ap.add_argument("--inner-pool", type=int, default=8, help="opponent candidates per outcome node")
+ap.add_argument("--out-cap", type=int, default=8, help="max sampled outcomes per chance node")
 args = ap.parse_args()
 
 OUT = Path(args.out_dir)
@@ -93,6 +96,10 @@ def aggregate():
     print(f"EXP-066 search-validation: {len(ref)} states, {len(rows)} arm rows")
     med_se = np.median([r["ref_se_top"] for r in ref.values()])
     print(f"reference precision: median top-16 SE = {med_se:.4f}/end\n")
+    tree_sids = {r["sid"] for r in rows if r["arm"].endswith("_term")}
+    if tree_sids:
+        rows = [r for r in rows if r["sid"] in tree_sids]
+        print(f"common-subset comparison: {len(tree_sids)} states covered by all arms")
     arms = sorted(set(r["arm"] for r in rows))
     for arm in arms:
         print(f"== {arm}")
@@ -343,7 +350,8 @@ if args.phase == "adjudicate":
         rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
     out_path = OUT / f"adj_shard{args.shard_id}.jsonl"
     done = {json.loads(l)["sid"] for l in out_path.read_text().splitlines()} if out_path.exists() else set()
-    for sid in range(len(SX)):
+    n_states = min(args.state_subset or len(SX), len(SX))
+    for sid in range(n_states):
         if sid % args.num_shards != args.shard_id or sid in done or sid not in ref:
             continue
         x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
@@ -393,7 +401,8 @@ if args.phase == "tree":
             st, cc, hh = post[0], env_bridge.next_condition(cc, 10), hh - 1
         return float(env_bridge.score_end(st, persp))
 
-    jobs = [(sid, arm) for sid in range(len(SX)) for arm in TREE_ARMS]
+    n_states = min(args.state_subset or len(SX), len(SX))
+    jobs = [(sid, arm) for sid in range(n_states) for arm in TREE_ARMS]
     for j, (sid, arm) in enumerate(jobs):
         if j % args.num_shards != args.shard_id or (sid, arm) in done:
             continue
@@ -404,7 +413,8 @@ if args.phase == "tree":
         kw = TREE_ARMS[arm]
         tree = HybridTree(x, c, H, 10, pool, prior, sample_fn=sample_fn, value_fn=value_fn,
                           rollout_fn=rollout_fn, noise=NZ, rng=rng,
-                          bw=kw["bw"], rollout_every=kw["rollout_every"])
+                          bw=kw["bw"], rollout_every=kw["rollout_every"],
+                          inner_pool=args.inner_pool, out_cap=args.out_cap)
         picks = tree.run(BUDGETS)
         chosen = {str(B): nearest_pool_idx(pool, a) for B, a in picks.items()}
         with out_path.open("a") as fh:

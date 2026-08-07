@@ -69,7 +69,15 @@ explanation. The champion answers automatically inside your `/throw` call
    — hit the stone in slot K so that IT finishes at target (tap-backs, splits).
    Use `{"stone_slot":K,"remove":true}` instead of `target` for a takeout
    (drives it out past the back line). Slot numbers come from the state view.
-4. `{"side":"A","type":"params","action":[speed,angle,spin,y0]}`
+   Unreliable taps and takeouts return `solvable:false` and cannot be committed.
+4. `{"side":"A","type":"hit_roll","stone_slot":K,"target":[along,lateral]}`
+   — hit the stone in slot K and roll YOUR shooter to `target`. The solver
+   searches soft through takeout weights and returns `solvable`,
+   `expected_roll_error_m`, `contact_reliability`, `removal_reliability`, and
+   `shooter_survives`. During the first-three-throws no-takeout window, an
+   opponent stone is hit but kept in play. A throw with `solvable:false` is
+   rejected; choose another target or shot.
+5. `{"side":"A","type":"params","action":[speed,angle,spin,y0]}`
    — raw physics: speed 2.20–3.01 m/s, aim angle ±0.1038 rad, spin ±7 rad/s
    (positive curls right), release lateral offset ±0.23 m. Speeds ≈2.45–2.6
    reach the house; ≥2.75 is takeout weight.
@@ -78,7 +86,9 @@ Solver responses include `solver.achieved_error_m` (how close the intent was
 actually met, noiselessly) and `preview.predicted_value_A` (the champion value
 head's estimate of the resulting board, + = good for Team A). Use
 `/solve` to compare a couple of intents before committing — that is exactly the
-kind of lookahead the champion itself uses.
+kind of lookahead the champion itself uses. Every solved intent returns
+`solver.solvable`; a false result is previewable but cannot be committed, so
+choose another target, stone, or shot. Raw `params` actions are the exception.
 
 ## Minimal loop (bash)
 

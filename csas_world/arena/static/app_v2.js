@@ -12,7 +12,7 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {}, pendingAdvance: null,
 };
-const APP_VERSION = "2.2.3";
+const APP_VERSION = "2.3.2";
 const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
 const REPLAY_RATE = 6;
 const _tele = [];
@@ -357,6 +357,7 @@ function humanOnTurn() {
   return m && m.status === "in_progress" && S.mySides.has(m.turn.team);
 }
 function resetShot() {
+  _previewSeq++;
   S.target = null; S.hitSlot = null; S.tapTarget = null; S.heat = null; S.solved = null;
   $("heatlegend").classList.add("hidden");
 }
@@ -393,27 +394,32 @@ function renderGame() {
 function updateShotUI() {
   const my = humanOnTurn();
   $("shotbar").style.opacity = my ? 1 : 0.55;
+  const rejectedShot = S.solved?.solver?.solvable === false;
   const ready = my && !S.busy &&
     ((S.mode === "draw" && S.target) ||
-     (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget)));
+     (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget))) &&
+    !rejectedShot;
   $("throwBtn").disabled = !ready;
   $("previewBtn").classList.toggle("hidden", !(S.coach && ready));
   $("hint").textContent = !my ? (S.match.status === "finished" ? "" : (S.online && S.mySides.size === 0 ? "Watching live…" : "Waiting for the other team…"))
     : S.mode === "draw" ? (S.target ? "Target set — Throw when ready." : "Tap the ice where the stone should stop.")
     : S.hitSlot == null ? "Tap a stone on the board."
     : S.hitAct === "remove" ? "Take-out selected — Throw when ready."
+    : S.hitAct === "roll" ? (S.tapTarget ? "Roll target set — Throw when ready."
+       : "Now tap where YOUR stone should roll after the hit.")
     : (S.tapTarget ? "Target set — Throw when ready (tap another stone to switch)."
        : "Now tap where that stone should end up (even right beside another stone).");
 }
 
 function boardTapped(al, la) {
   if (S.view !== "game" || !humanOnTurn() || S.busy) return;
+  _previewSeq++;                            // invalidate any solve still in flight
   if (S.mode === "draw") { S.target = [al, la]; S.solved = null; }
   else {
     // Once a stone is picked in tap mode, the next tap is the TARGET — except a
     // tap directly ON a stone (tight radius), which switches the selection.
     // (A generous radius here used to swallow targets near stones, e.g. freezes.)
-    const targeting = S.hitSlot != null && S.hitAct === "tap";
+    const targeting = S.hitSlot != null && (S.hitAct === "tap" || S.hitAct === "roll");
     let best = null, bd = targeting ? 0.22 : 0.5;
     for (const s of S.match.board) {
       const d = Math.hypot(s.along - al, s.lateral - la);
@@ -424,15 +430,15 @@ function boardTapped(al, la) {
     S.solved = null;
   }
   renderGame();
-  if (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget))
-    autoPreviewHit();
+  if ((S.mode === "draw" && S.target) ||
+      (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget)))
+    autoPreviewShot();
 }
 
 let _previewSeq = 0;
-async function autoPreviewHit() {
-  // hit shots are physics-constrained (the struck stone can only leave along a
-  // contact line) — solve immediately and SHOW the predicted result before the
-  // user commits; the Throw then replays the solved action exactly.
+async function autoPreviewShot() {
+  // Solve constrained shots immediately and show the predicted result before
+  // the user commits; Throw then replays the solved action exactly.
   const seq = ++_previewSeq;
   $("hint").textContent = "Working out the shot…";
   $("throwBtn").disabled = true;
@@ -441,7 +447,30 @@ async function autoPreviewHit() {
     if (seq !== _previewSeq) return;             // selection changed meanwhile
     S.solved = d;
     renderGame();
-    if (S.hitAct === "remove") {
+    if (d.solver?.solvable === false) {
+      $("hint").textContent = (d.solver.solvability_reason || "That shot is not reliable.") +
+        " Choose another target, stone, or shot.";
+      $("throwBtn").disabled = true;
+      return;
+    }
+    if (S.mode === "draw") {
+      const err = d.solver?.achieved_error_m;
+      $("hint").textContent = err == null ? "Ready — Throw when ready."
+        : `Stone should finish within ~${Math.round(err * 100)} cm. Throw when ready.`;
+    } else if (S.hitAct === "roll") {
+      const err = d.solver?.expected_roll_error_m;
+      const contact = d.solver?.contact_reliability;
+      const rel = d.solver?.removal_reliability;
+      const surv = d.solver?.shooter_survives;
+      let msg = err == null ? "Ready — Throw when ready."
+        : err > 0.9 ? `⚠️ Hard roll — your stone typically ends ~${err.toFixed(1)} m from that spot.`
+        : `Your stone typically rolls to ~${Math.round(err * 100)} cm of that spot.`;
+      if (contact != null && contact < 0.7) msg += ` Makes the hit ~${Math.round(contact * 100)}% of the time.`;
+      if (d.solver?.takeout_allowed === false) msg += " The no-takeout rule is active, so the hit stone stays in play.";
+      else if (rel != null && rel < 0.6) msg += ` Removes the hit stone only ~${Math.round(rel * 100)}% of the time.`;
+      if (surv != null && surv < 0.7) msg += ` ⚠️ Your shooter may roll out (${Math.round(surv * 100)}% stays).`;
+      $("hint").textContent = msg + " Throw when ready.";
+    } else if (S.hitAct === "remove") {
       const rel = d.solver?.removal_reliability;
       $("hint").textContent = rel != null && rel < 0.6
         ? `⚠️ Risky from here — removes it only ~${Math.round(rel * 100)}% of the time. Throw anyway or pick another stone.`
@@ -462,15 +491,20 @@ async function autoPreviewHit() {
 
 function shotBody(preview) {
   const side = S.match.turn.team;
-  if (!preview && S.mode === "hit" && S.solved?.intended)
+  if (!preview && S.solved?.intended)
     return { side, type: "params", action: S.solved.intended };   // throw the previewed shot
   if (S.mode === "draw") return { side, type: "draw", target: S.target, preview };
   if (S.hitAct === "remove") return { side, type: "after_contact", stone_slot: S.hitSlot, remove: true, preview };
+  if (S.hitAct === "roll") return { side, type: "hit_roll", stone_slot: S.hitSlot, target: S.tapTarget, preview };
   return { side, type: "after_contact", stone_slot: S.hitSlot, target: S.tapTarget, preview };
 }
 
 async function doThrow() {
   if (S.busy) return;
+  if (!S.solved || S.solved.solver?.solvable === false) {
+    toast("Choose a shot the solver can complete first.", 3600);
+    return;
+  }
   S.busy = true;
   $("hint").textContent = "Delivering…";
   $("throwBtn").disabled = true;
@@ -730,14 +764,17 @@ document.addEventListener("DOMContentLoaded", () => {
     b.classList.add("sel"); S.ends = +b.dataset.ends;
   });
   document.querySelectorAll(".modechip").forEach((b) => b.onclick = () => {
+    _previewSeq++;
     document.querySelectorAll(".modechip").forEach((x) => x.classList.remove("sel"));
     b.classList.add("sel"); S.mode = b.dataset.m;
     $("hitopts").classList.toggle("hidden", S.mode !== "hit");
     S.target = null; S.hitSlot = null; S.tapTarget = null; S.solved = null; renderGame();
   });
   document.querySelectorAll(".hitopt").forEach((b) => b.onclick = () => {
+    _previewSeq++;
     document.querySelectorAll(".hitopt").forEach((x) => x.classList.remove("sel"));
-    b.classList.add("sel"); S.hitAct = b.dataset.h; S.tapTarget = null; renderGame();
+    b.classList.add("sel"); S.hitAct = b.dataset.h; S.tapTarget = null; S.solved = null; renderGame();
+    if (S.mode === "hit" && S.hitSlot != null && S.hitAct === "remove") autoPreviewShot();
   });
   $("throwBtn").onclick = doThrow;
   $("previewBtn").onclick = doPreview;

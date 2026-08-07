@@ -8,6 +8,7 @@ Modalities
                   collision, arriving soft/medium/heavy"
 ``after_contact`` "hit the stone in slot K so that IT ends up THERE (or is
                   removed from play)"
+``hit_roll``      "hit the stone in slot K, then roll the SHOOTER to target"
 
 Strategy: a pre-computed shooter-only *path bank* (dense action lattice run
 through the authoritative physics on an empty sheet, final rest + subsampled
@@ -53,6 +54,9 @@ BANK_Y0S = (-0.20, 0.0, 0.20)
 BANK_PATH_STRIDE = 6                      # record every 6th macro step (0.12 s)
 
 WEIGHT_SPEEDS = {"soft": 0.55, "medium": 1.2, "heavy": 2.2}  # m/s at contact
+MAX_PLACEMENT_ERROR_M = 0.9
+MIN_PLACEMENT_RELIABILITY = 0.65
+MIN_TAKEOUT_RELIABILITY = 0.60
 
 _BANK: Optional[Dict[str, np.ndarray]] = None
 _BANK_LOCK = threading.Lock()
@@ -199,7 +203,14 @@ def solve_draw(x: np.ndarray, c: np.ndarray, target: Tuple[float, float],
                         np.linalg.norm(np.nan_to_num(f, nan=1e3) - tgt[None], axis=1), 1e3)
 
     a, l = _cem_refine(x, c, seed_a, loss, rng=np.random.default_rng(seed))
-    return a, {"achieved_error_m": round(float(l), 3), "target": [float(t) for t in tgt]}
+    solvable = float(l) <= MAX_PLACEMENT_ERROR_M
+    return a, {
+        "achieved_error_m": round(float(l), 3),
+        "target": [float(t) for t in tgt],
+        "solvable": bool(solvable),
+        "solvability_reason": (None if solvable else
+                                "The stone cannot finish close enough to that target."),
+    }
 
 
 def _bank_contact_candidates(target: np.ndarray, want_speed: Optional[float],
@@ -297,14 +308,56 @@ def solve_contact(x: np.ndarray, c: np.ndarray, target: Tuple[float, float],
             if e < best_e:
                 best_a, best_e, best_info = a, e, info
         sigma *= 0.5
-    return best_a, {"achieved_error_m": round(best_e, 3), "target": [float(t) for t in tgt],
-                    "weight": weight, **best_info}
+    solvable = best_e <= 0.35
+    return best_a, {
+        "achieved_error_m": round(best_e, 3),
+        "target": [float(t) for t in tgt],
+        "weight": weight,
+        "solvable": bool(solvable),
+        "solvability_reason": (None if solvable else
+                                "The shooter cannot reach that contact point."),
+        **best_info,
+    }
+
+
+
+
+def _robust_cem(x: np.ndarray, c: np.ndarray, cands: np.ndarray, loss,
+                seed: int = 0, iters: int = 4, pop: int = 96,
+                k_noise: int = 8, noise_model=None) -> Tuple[np.ndarray, float]:
+    """CEM over the noise-robust objective: each candidate is scored by mean loss
+    over k CRN execution-noise realizations (contact shots amplify noise)."""
+
+    def robust_loss_batch(actions):
+        sampler = noise_model or _noise()
+        realized = sampler.sample_batch(np.asarray(actions, np.float32), k_noise,
+                                        crn=True).reshape(-1, 4)
+        posts_ = _simulate_real(x, c, realized)
+        return loss(posts_).reshape(len(actions), k_noise).mean(axis=1)
+
+    losses = robust_loss_batch(cands)
+    seed_a = cands[int(np.argmin(losses))]
+    rng_ = np.random.default_rng(seed)
+    mu, sigma = seed_a.copy(), np.asarray([0.06, 0.012, 3.0, 0.06], np.float32)
+    best_a, best_l = seed_a, float(losses.min())
+    for _ in range(iters):
+        pop_a = clip_raw(mu[None] + rng_.standard_normal((pop, 4)).astype(np.float32) * sigma)
+        pop_a[0] = best_a
+        pl = robust_loss_batch(pop_a)
+        order = np.argsort(pl)
+        if pl[order[0]] < best_l:
+            best_l, best_a = float(pl[order[0]]), pop_a[int(order[0])]
+        elite = pop_a[order[:10]]
+        mu = elite.mean(axis=0)
+        sigma = 0.6 * sigma + 0.4 * elite.std(axis=0)
+    return best_a, best_l
 
 
 def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
                         target: Optional[Tuple[float, float]] = None,
                         remove: bool = False, n_init: int = 128,
-                        seed: int = 0) -> Tuple[np.ndarray, Dict[str, Any]]:
+                        seed: int = 0,
+                        throws_left: Optional[int] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Hit the stone in ``stone_slot`` so it finishes at ``target`` -- or, with
     ``remove=True``, so it is taken out of play (and the thrown stone stays)."""
     from csas.common import raw_to_compact_m
@@ -326,6 +379,14 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
         [_bank_contact_candidates(hit_pos, s, n_init // 8) for s in speeds])
 
     tgt = None if target is None else np.asarray(target, dtype=np.float32)
+    victim_is_opponent = (int(stone_slot) // 6) != int(round(float(c[2])))
+    takeout_allowed = throws_left is None or throws_left < 8 or not victim_is_opponent
+
+    def legal_posts(posts_: np.ndarray) -> np.ndarray:
+        if throws_left is None:
+            return posts_
+        corrected, _ = env_bridge.apply_legality(x, posts_, int(throws_left), c)
+        return corrected
 
     # Real takeout rules (boundary removal ON): a removed stone simply
     # disappears from the post state, so "removed" == gone. The shaping term
@@ -333,6 +394,7 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
     BACK_LINE = 1.974
 
     def loss(posts_):
+        posts_ = legal_posts(posts_)
         f_hit = _final_compact(posts_, int(stone_slot))
         gone = ~np.isfinite(f_hit).all(axis=1)
         f_safe = np.nan_to_num(f_hit, nan=0.0)
@@ -349,48 +411,191 @@ def solve_after_contact(x: np.ndarray, c: np.ndarray, stone_slot: int,
         l = np.where(gone, 8.0, np.linalg.norm(f_safe - tgt[None], axis=1))
         return l + np.where(~gone & (moved < 0.05), 2.0, 0.0)
 
-    # NOISE-ROBUST objective: contact shots amplify execution noise (millimetres
-    # at contact swing the victim's exit line), so score every candidate by its
-    # MEAN loss over K CRN noise realizations, not its noiseless outcome.
-    K_NOISE = 8
-
-    def robust_loss_batch(actions):
-        realized = _noise().sample_batch(np.asarray(actions, np.float32), K_NOISE,
-                                         crn=True).reshape(-1, 4)
-        posts_ = _simulate_real(x, c, realized)
-        return loss(posts_).reshape(len(actions), K_NOISE).mean(axis=1)
-
-    losses = robust_loss_batch(cands)
-    seed_a = cands[int(np.argmin(losses))]
-
-    # CEM over the robust objective (action-space; sims batched pop*K on GPU)
-    rng_ = np.random.default_rng(seed)
-    mu, sigma = seed_a.copy(), np.asarray([0.06, 0.012, 3.0, 0.06], np.float32)
-    best_a, best_l = seed_a, float(losses.min())
-    for _ in range(4):
-        pop_a = clip_raw(mu[None] + rng_.standard_normal((96, 4)).astype(np.float32) * sigma)
-        pop_a[0] = best_a
-        pl = robust_loss_batch(pop_a)
-        order = np.argsort(pl)
-        if pl[order[0]] < best_l:
-            best_l, best_a = float(pl[order[0]]), pop_a[int(order[0])]
-        elite = pop_a[order[:10]]
-        mu = elite.mean(axis=0)
-        sigma = 0.6 * sigma + 0.4 * elite.std(axis=0)
-    a, l = best_a, best_l
-    final = _final_compact(_simulate_real(x, c, a[None]), int(stone_slot))[0]
+    from world.search.noise import make_noise
+    robust_noise = make_noise(DEFAULT_NOISE_CFG, seed=712 + seed)
+    a, l = _robust_cem(x, c, cands, loss, seed=seed, noise_model=robust_noise)
+    noiseless_posts = legal_posts(_simulate_real(x, c, a[None]))
+    final = _final_compact(noiseless_posts, int(stone_slot))[0]
     final_desc = "removed" if not np.isfinite(final).all() else \
         [round(float(final[0]), 3), round(float(final[1]), 3)]
     info: Dict[str, Any] = {"stone_slot": int(stone_slot), "stone_final": final_desc}
+
+    diagnostic_noise = make_noise(DEFAULT_NOISE_CFG, seed=3712 + seed)
+    realized = diagnostic_noise.sample_batch(a[None], 64, crn=False).reshape(-1, 4)
+    diagnostic_posts = legal_posts(_simulate_real(x, c, realized))
+    f_hit = _final_compact(diagnostic_posts, int(stone_slot))
+    gone = ~np.isfinite(f_hit).all(axis=1)
+    moved = gone | (np.linalg.norm(np.nan_to_num(f_hit) - hit_pos[None], axis=1) > 0.05)
     if remove:
-        # l = mean removal loss over noise draws; <0.5 ~ removes in most worlds
-        info.update({"removed": bool(l < 0.5), "removal_reliability": round(1.0 - min(float(l), 1.0), 2),
-                     "loss": round(float(l), 3)})
+        reliability = float(gone.mean())
+        solvable = (takeout_allowed and not np.isfinite(final).all() and
+                    reliability >= MIN_TAKEOUT_RELIABILITY)
+        if not takeout_allowed:
+            reason = "The no-takeout rule is active for that opponent stone."
+        elif reliability < MIN_TAKEOUT_RELIABILITY or np.isfinite(final).all():
+            reason = "No reliable takeout is available for that stone."
+        else:
+            reason = None
+        info.update({
+            "removed": bool(not np.isfinite(final).all()),
+            "removal_reliability": round(reliability, 2),
+            "takeout_allowed": bool(takeout_allowed),
+            "solvable": bool(solvable),
+            "solvability_reason": reason,
+            "loss": round(float(l), 3),
+        })
     else:
-        noiseless = float(loss(_simulate_real(x, c, a[None]))[0])
-        info.update({"achieved_error_m": round(noiseless, 3),
-                     "expected_error_m": round(float(l), 3),
-                     "target": [float(t) for t in tgt]})
+        successful = ~gone & moved
+        errors = (np.linalg.norm(f_hit[successful] - tgt[None], axis=1)
+                  if successful.any() else np.asarray([], dtype=np.float32))
+        expected_error = float(errors.mean()) if len(errors) else None
+        noiseless_error = (float(np.linalg.norm(final - tgt))
+                           if np.isfinite(final).all() and
+                           float(np.linalg.norm(final - hit_pos)) > 0.05 else None)
+        reliability = float(successful.mean())
+        solvable = (noiseless_error is not None and
+                    noiseless_error <= MAX_PLACEMENT_ERROR_M and
+                    expected_error is not None and
+                    expected_error <= MAX_PLACEMENT_ERROR_M and
+                    reliability >= MIN_PLACEMENT_RELIABILITY)
+        if noiseless_error is None or reliability < MIN_PLACEMENT_RELIABILITY:
+            reason = "No reliable path moves that stone and keeps it in play."
+        elif (noiseless_error > MAX_PLACEMENT_ERROR_M or expected_error is None or
+              expected_error > MAX_PLACEMENT_ERROR_M):
+            reason = "The hit stone cannot finish close enough to that target."
+        else:
+            reason = None
+        info.update({
+            "achieved_error_m": (round(noiseless_error, 3)
+                                 if noiseless_error is not None else None),
+            "expected_error_m": (round(expected_error, 3)
+                                 if expected_error is not None else None),
+            "contact_reliability": round(float(moved.mean()), 2),
+            "successful_move_reliability": round(reliability, 2),
+            "solvable": bool(solvable),
+            "solvability_reason": reason,
+            "target": [float(t) for t in tgt],
+        })
+    return a, info
+
+
+
+
+def solve_hit_roll(x: np.ndarray, c: np.ndarray, stone_slot: int,
+                   target: Tuple[float, float], n_init: int = 128,
+                   seed: int = 0,
+                   throws_left: Optional[int] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Classic hit-and-roll: strike the stone in ``stone_slot`` (preferably
+    removing it) and have the SHOOTER roll to ``target``. Noise-robust."""
+    from csas.common import raw_to_compact_m
+
+    if stone_slot not in live_slots(x):
+        raise ValueError(f"stone slot {stone_slot} is not in play")
+    raw = np.asarray(x, dtype=np.float32).reshape(NUM_STONES, 2) * POS_MAX
+    hit_pos = raw_to_compact_m(raw)[stone_slot]
+    thrown = _thrown_slot(x, c)
+    obstacles = _other_stones(x, exclude=int(stone_slot), near=hit_pos)
+    # Hit-and-rolls need a much wider weight range than takeouts. Softer
+    # contact leaves the shooter alive and controllable; heavier weight remains
+    # available when the requested roll requires a thin hit.
+    contact_speeds = (0.8, 1.3, 1.9, 2.5, 3.0)
+    n_clear = max(1, (3 * n_init) // (4 * len(contact_speeds)))
+    n_unfiltered = max(1, n_init // (4 * len(contact_speeds)))
+    cands = np.concatenate(
+        [_bank_contact_candidates(hit_pos, s, n_clear, obstacles=obstacles)
+         for s in contact_speeds] +
+        [_bank_contact_candidates(hit_pos, s, n_unfiltered) for s in contact_speeds])
+    tgt = np.asarray(target, dtype=np.float32)
+    victim_is_opponent = (int(stone_slot) // 6) != int(round(float(c[2])))
+    takeout_allowed = throws_left is None or throws_left < 8 or not victim_is_opponent
+
+    def legal_posts(posts_: np.ndarray) -> np.ndarray:
+        if throws_left is None:
+            return posts_
+        corrected, _ = env_bridge.apply_legality(x, posts_, int(throws_left), c)
+        return corrected
+
+    def loss(posts_):
+        posts_ = legal_posts(posts_)
+        f_thr = _final_compact(posts_, thrown)
+        thr_gone = ~np.isfinite(f_thr).all(axis=1)
+        f_vic = _final_compact(posts_, int(stone_slot))
+        vic_gone = ~np.isfinite(f_vic).all(axis=1)
+        vic_moved = vic_gone | (
+            np.linalg.norm(np.nan_to_num(f_vic) - hit_pos[None], axis=1) > 0.05
+        )
+        d = np.where(thr_gone, 8.0, np.linalg.norm(np.nan_to_num(f_thr) - tgt[None], axis=1))
+        # Contact is the defining constraint. Keep its miss penalty above every
+        # possible roll-distance error so an easy draw can never beat a hit.
+        l = d + np.where(~vic_gone & ~vic_moved, 12.0, 0.0)
+        if takeout_allowed:
+            # Removal is only a tie-breaker. The user's roll target is the
+            # primary outcome, unlike a dedicated takeout shot.
+            l = l + np.where(~vic_gone, 0.15, 0.0)
+        return l
+
+    from world.search.noise import make_noise
+    robust_noise = make_noise(DEFAULT_NOISE_CFG, seed=1712 + seed)
+    a, l = _robust_cem(x, c, cands, loss, seed=seed, iters=5, pop=128,
+                       k_noise=12, noise_model=robust_noise)
+
+    # Diagnose on a larger independent fan so an unlucky handful of samples
+    # cannot turn a blank/miss into a reported solution.
+    diagnostic_noise = make_noise(DEFAULT_NOISE_CFG, seed=2712 + seed)
+    realized = diagnostic_noise.sample_batch(a[None], 64, crn=False).reshape(-1, 4)
+    posts = legal_posts(_simulate_real(x, c, realized))
+    f_thr = _final_compact(posts, thrown)
+    thr_ok = np.isfinite(f_thr).all(axis=1)
+    f_vic = _final_compact(posts, int(stone_slot))
+    vic_gone = ~np.isfinite(f_vic).all(axis=1)
+    vic_moved = vic_gone | (
+        np.linalg.norm(np.nan_to_num(f_vic) - hit_pos[None], axis=1) > 0.05
+    )
+    successful = thr_ok & vic_moved
+    d_ok = (np.linalg.norm(np.nan_to_num(f_thr)[successful] - tgt[None], axis=1)
+            if successful.any() else np.asarray([], dtype=np.float32))
+    noiseless_post = legal_posts(_simulate_real(x, c, a[None]))
+    noiseless_thr = _final_compact(noiseless_post, thrown)[0]
+    noiseless_vic = _final_compact(noiseless_post, int(stone_slot))[0]
+    noiseless_hit = (not np.isfinite(noiseless_vic).all() or
+                     float(np.linalg.norm(noiseless_vic - hit_pos)) > 0.05)
+    noiseless_roll_error = (float(np.linalg.norm(noiseless_thr - tgt))
+                            if noiseless_hit and np.isfinite(noiseless_thr).all() else None)
+    expected_roll_error = float(np.mean(d_ok)) if len(d_ok) else None
+    successful_reliability = float(successful.mean())
+
+    solvable = (noiseless_roll_error is not None and
+                noiseless_roll_error <= MAX_PLACEMENT_ERROR_M and
+                expected_roll_error is not None and
+                expected_roll_error <= MAX_PLACEMENT_ERROR_M and
+                successful_reliability >= MIN_PLACEMENT_RELIABILITY)
+    if (noiseless_roll_error is None or
+            successful_reliability < MIN_PLACEMENT_RELIABILITY):
+        reason = "No reliable path hits that stone and keeps your shooter in play."
+    elif (noiseless_roll_error > MAX_PLACEMENT_ERROR_M or
+          expected_roll_error is None or
+          expected_roll_error > MAX_PLACEMENT_ERROR_M):
+        reason = "The shooter cannot roll close enough to that target."
+    else:
+        reason = None
+    info: Dict[str, Any] = {
+        "stone_slot": int(stone_slot),
+        "target": [float(v) for v in tgt],
+        "solvable": bool(solvable),
+        "solvability_reason": reason,
+        "roll_error_m": (round(noiseless_roll_error, 3)
+                         if noiseless_roll_error is not None else None),
+        "expected_roll_error_m": (round(expected_roll_error, 3)
+                                  if expected_roll_error is not None else None),
+        "successful_roll_reliability": round(successful_reliability, 2),
+        "contact_reliability": round(float(vic_moved.mean()), 2),
+        "removal_reliability": round(float(vic_gone.mean()), 2),
+        "shooter_survives": round(float(thr_ok.mean()), 2),
+        "takeout_allowed": bool(takeout_allowed),
+        "shooter_final": ("removed" if not np.isfinite(noiseless_thr).all()
+                          else [round(float(noiseless_thr[0]), 3), round(float(noiseless_thr[1]), 3)]),
+        "loss": round(float(l), 3),
+    }
     return a, info
 
 
@@ -409,11 +614,16 @@ def solve(x: np.ndarray, c: np.ndarray, req: Dict[str, Any]) -> Tuple[np.ndarray
         return solve_draw(x, c, req["target"], seed=seed)
     if kind == "contact":
         return solve_contact(x, c, req["target"], weight=req.get("weight", "medium"), seed=seed)
+    if kind == "hit_roll":
+        return solve_hit_roll(x, c, int(req["stone_slot"]),
+                              tuple(req["target"]), seed=seed,
+                              throws_left=req.get("throws_left"))
     if kind == "after_contact":
         return solve_after_contact(x, c, int(req["stone_slot"]),
                                    target=req.get("target"),
-                                   remove=bool(req.get("remove", False)), seed=seed)
+                                   remove=bool(req.get("remove", False)), seed=seed,
+                                   throws_left=req.get("throws_left"))
     raise ValueError(f"unknown shot type '{kind}'")
 
 
-__all__ = ["solve", "solve_draw", "solve_contact", "solve_after_contact", "get_bank"]
+__all__ = ["solve", "solve_draw", "solve_contact", "solve_after_contact", "solve_hit_roll", "get_bank"]

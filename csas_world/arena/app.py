@@ -55,11 +55,11 @@ class NewMatch(BaseModel):
 
 class ShotRequest(BaseModel):
     side: Optional[str] = Field(default=None, description='"A" or "B"; defaults to side on turn')
-    type: str = Field(default="params", description='"params" | "draw" | "contact" | "after_contact"')
+    type: str = Field(default="params", description='"params" | "draw" | "contact" | "after_contact" | "hit_roll"')
     action: Optional[List[float]] = Field(default=None, description="params: [speed, angle, spin, y0]")
     target: Optional[List[float]] = Field(default=None, description="[along, lateral] meters")
     weight: Optional[str] = Field(default="medium", description='contact: "soft" | "medium" | "heavy"')
-    stone_slot: Optional[int] = Field(default=None, description="after_contact: slot of stone to move")
+    stone_slot: Optional[int] = Field(default=None, description="after_contact/hit_roll: slot of stone to hit")
     remove: bool = Field(default=False, description="after_contact: take the stone out of play")
     seed: int = 0
     preview: bool = Field(default=False, description="solve + predict only; do not throw")
@@ -88,8 +88,21 @@ def _match(mid: str) -> Match:
 def _solve_intent(m: Match, req: ShotRequest) -> tuple:
     x, c = m.state_c()
     body = req.model_dump()
-    if req.type != "params" and req.type not in ("draw", "contact", "after_contact"):
+    if req.type != "params" and req.type not in ("draw", "contact", "after_contact", "hit_roll"):
         raise HTTPException(422, f"unknown shot type {req.type!r}")
+    if req.type == "params" and (req.action is None or len(req.action) != 4):
+        raise HTTPException(422, "params requires action=[speed, angle, spin, y0]")
+    needs_target = req.type in ("draw", "contact", "hit_roll") or (
+        req.type == "after_contact" and not req.remove
+    )
+    if needs_target and (req.target is None or len(req.target) != 2 or
+                         not np.isfinite(req.target).all()):
+        raise HTTPException(422, f"{req.type} requires a finite target=[along, lateral]")
+    if req.type in ("after_contact", "hit_roll") and req.stone_slot is None:
+        raise HTTPException(422, f"{req.type} requires stone_slot")
+    # Solvers normally need only the encoded state. Hit-and-roll also uses the
+    # live horizon so it does not optimize a forfeited early opponent takeout.
+    body["throws_left"] = int(m.cur_end["throws_left"])
     try:
         action, info = solver.solve(x, c, body)
     except (KeyError, TypeError) as e:
@@ -226,6 +239,9 @@ def throw(mid: str, body: ShotRequest):
     if body.preview:
         return {"intended": [round(float(v), 6) for v in action], "solver": info,
                 "preview": _preview(m, action)}
+    if body.type != "params" and info.get("solvable") is False:
+        reason = info.get("solvability_reason") or "No reliable solution is available."
+        raise HTTPException(422, f"{reason} Choose another target, stone, or shot.")
     try:
         result = m.apply_throw(action, side, meta={"request": {
             k: v for k, v in body.model_dump().items()

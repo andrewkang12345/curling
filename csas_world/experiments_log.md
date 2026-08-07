@@ -1894,6 +1894,16 @@ funded stochastic tree DOES add value; its targets become candidates for trainin
    regrets are possible and honest (they expose the ref's own curse).
 4. Monotonicity is judged on the 60-state AGGREGATE means within SEs (per-state
    non-monotonicity is expected variance).
+**COMPUTE RESCOPE (2026-08-07, measured not guessed):** an instrumented timing probe put the
+faithful sequential tree at **172 min/state/arm at 64k sims** (bottleneck = per-visit GPU
+policy forward for each new outcome node, ~0.3 s/visit under 12-process contention), i.e.
+~43 h for 60 states x 2 arms. Rescoped to land same-day WITHOUT touching the design's
+integrity: tree+adjudicate run on the FIRST 30 states (20 tactical + 10 control), 20 shards,
+inner_pool 16->8 and outcome cap 16->8. All arms are compared on that COMMON SUBSET (the
+aggregate now filters to tree-covered states), so cross-arm regret stays apples-to-apples;
+per-arm SEs grow ~sqrt(2). Budgets, leaves, chance-node semantics, held-out adjudication and
+the monotonicity criterion are unchanged.
+
 5. Added `puct_term` arm (bw→0 disables kernel sharing = plain prior-guided PUCT) for the
    clean 2x2 diagnosis: PUCT>hybrid => kernel oversmooths; hybrid>PUCT => continuous
    sharing helps; both>flat => adaptive allocation matters; neither>flat => plateau story

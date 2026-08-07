@@ -528,6 +528,8 @@ class Match:
         lines.append('  {"side":"%s","type":"after_contact","stone_slot":K,"target":[along,lateral]}' % team)
         lines.append('        — hit stone in slot K so IT ends up at target (use "remove":true instead of')
         lines.append('          target to take it out of play)')
+        lines.append('  {"side":"%s","type":"hit_roll","stone_slot":K,"target":[along,lateral]}' % team)
+        lines.append('        — hit stone in slot K, then roll YOUR shooter to target')
         lines.append('  {"side":"%s","type":"params","action":[speed,angle,spin,y0]}' % team)
         lines.append(f'        — raw physics: speed {ACTION_LOW[0]:.2f}..{ACTION_HIGH[0]:.2f} m/s, aim angle '
                      f'{ACTION_LOW[1]:.4f}..{ACTION_HIGH[1]:.4f} rad, spin {ACTION_LOW[2]:.0f}..{ACTION_HIGH[2]:.0f} rad/s '
