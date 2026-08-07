@@ -75,7 +75,7 @@ class HybridTree:
     def __init__(self, x, c, h, sie, pool, pool_prior, *,
                  sample_fn: Callable, value_fn: Callable, rollout_fn: Callable,
                  noise, rng, c_puct=1.5, bw=1.0, min_evidence=8,
-                 out_alpha=0.5, out_cap=16, inner_pool=16, rollout_every=4):
+                 out_alpha=1.0, out_cap=16, inner_pool=16, rollout_every=4):
         self.sie = int(sie)
         self.sample_fn = sample_fn        # (x, c, n) -> [n,4] policy proposals
         self.value_fn = value_fn          # (x, c) -> V for c's to-move block
@@ -140,7 +140,8 @@ class HybridTree:
         if ch is None:
             ch = node.chance[i] = _Chance(node.pool[i])
         # --- chance node: double widening over outcomes ---
-        allowed = min(self.out_cap, max(1, int(np.ceil((sum(ch.out_visits) + 1) ** self.out_alpha))))
+        allowed = min(self.out_cap, sum(ch.out_visits) + 1) if self.out_alpha >= 1.0 else \
+            min(self.out_cap, max(1, int(np.ceil((sum(ch.out_visits) + 1) ** self.out_alpha))))
         if len(ch.outcomes) < allowed:
             a = self.noise.sample_batch(ch.action[None], 1).reshape(4).astype(np.float32)
             post, _ = env_bridge.apply_legality(
@@ -167,8 +168,13 @@ class HybridTree:
         """Run until each simulator-call checkpoint; return {budget: chosen root action}."""
         out: Dict[int, np.ndarray] = {}
         for cp in sorted(checkpoints):
+            stall = 0
             while self.budget.sims < cp:
+                before = self.budget.sims
                 self._visit(self.root)
+                stall = stall + 1 if self.budget.sims == before else 0
+                if stall > 20000:   # saturated tree: no sim-consuming work left
+                    break
             k = self.root.n_open
             V, W = _kr(self.root.pool[:k].astype(np.float64),
                        self.root.edge_n[:k], self.root.edge_sum[:k], self.bw)
