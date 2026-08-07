@@ -1878,6 +1878,28 @@ conclusion stands at the level of the game, closing the search question permanen
 funded stochastic tree DOES add value; its targets become candidates for training
 (gated: only after monotonicity holds). Chained behind EXP-065 (`_exp066_chain.sh`).
 
+**AMENDMENTS (user review, 2026-08-07, adopted before any results were read):**
+1. PRIMARY correctness arms use TERMINAL-ONLY leaves at h=2 (`hybrid_term`) — no value head
+   anywhere in the primary, so a failure is attributable to the tree, not V (the historical
+   ambiguity). The V-leaf variant is parked as the secondary practical-speed arm
+   (4 partial rows relabeled `hybrid_v_partial`).
+2. Chance-node audit vs the "decision nodes optimize; chance nodes integrate" invariant:
+   PASSES — outcomes are i.i.d. draws from the true execution-noise model, no UCT/kernel at
+   chance nodes, children revisited min-visits-first and every backup weighted equally, so
+   the chance value is a plain MC integral. One standard-MCTS nuance noted: early backups
+   are leaf estimates that deepen over time (mean backup over evolving estimates).
+3. NEW `adjudicate` phase: held-out simple regret — the reference argmax carries winner's
+   curse, so the ref-selected action AND every arm's chosen action are RE-evaluated fresh
+   (new seed, stage-B precision); regret = fresh(ref_argmax) − fresh(chosen). Negative
+   regrets are possible and honest (they expose the ref's own curse).
+4. Monotonicity is judged on the 60-state AGGREGATE means within SEs (per-state
+   non-monotonicity is expected variance).
+5. Added `puct_term` arm (bw→0 disables kernel sharing = plain prior-guided PUCT) for the
+   clean 2x2 diagnosis: PUCT>hybrid => kernel oversmooths; hybrid>PUCT => continuous
+   sharing helps; both>flat => adaptive allocation matters; neither>flat => plateau story
+   strengthens decisively.
+
+
 
 ## Template for a new entry
 

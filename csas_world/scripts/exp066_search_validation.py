@@ -49,7 +49,7 @@ from world.config import Config, load_config
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--phase", required=True,
-                choices=["states", "ref", "flat", "tree", "aggregate"])
+                choices=["states", "ref", "flat", "tree", "adjudicate", "aggregate"])
 ap.add_argument("--config", default="configs/exp_037_sig_screen_tree.yaml")
 ap.add_argument("--policy", default="checkpoints/csas_world/az_v15_L8/incumbent0_policy_csas.pt")
 ap.add_argument("--world", default="checkpoints/csas_world/az_v14d/best.pt")
@@ -81,9 +81,15 @@ def aggregate():
     rows = []
     for f in list(OUT.glob("flat_shard*.jsonl")) + list(OUT.glob("tree_shard*.jsonl")):
         rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+    adj = {}
+    for f in OUT.glob("adj_shard*.jsonl"):
+        for l in f.read_text().splitlines():
+            r = json.loads(l); adj[r["sid"]] = r
     if not ref or not rows:
         print(f"incomplete: {len(ref)} ref states, {len(rows)} arm rows")
         return
+    if adj:
+        print(f"regret source: HELD-OUT fresh evaluation ({len(adj)} states; curse-free)")
     print(f"EXP-066 search-validation: {len(ref)} states, {len(rows)} arm rows")
     med_se = np.median([r["ref_se_top"] for r in ref.values()])
     print(f"reference precision: median top-16 SE = {med_se:.4f}/end\n")
@@ -100,13 +106,19 @@ def aggregate():
                     rf = ref.get(r["sid"])
                     if rf is None or (strat != "all" and rf["stratum"] != strat):
                         continue
-                    vals = np.asarray(rf["ref"])
-                    rs.append(float(vals.max() - vals[r["chosen_idx"][str(B)]]))
+                    a = adj.get(r["sid"])
+                    ci = r["chosen_idx"][str(B)]
+                    if a is not None and str(ci) in a["held"]:
+                        rs.append(float(a["held"][str(a["ref_argmax"])] - a["held"][str(ci)]))
+                    else:
+                        vals = np.asarray(rf["ref"])
+                        rs.append(float(vals.max() - vals[ci]))
                 if rs:
                     line.append(f"B={B//1000}k: {np.mean(rs):+.4f}±{np.std(rs)/math.sqrt(len(rs)):.4f}")
             print(f"   [{strat:8s}] " + "   ".join(line))
         print()
-    print("verdict rule: sound implementation <=> regret decreases monotonically in B;")
+    print("verdict rule: sound implementation <=> AGGREGATE mean regret decreases in B (within SEs —")
+    print("per-state non-monotonicity is expected variance);")
     print("game-level ceiling <=> all arms' 64k regret ~ reference noise floor.")
 
 
@@ -317,12 +329,52 @@ if args.phase == "flat":
     print("EXP066_FLAT_SHARD_DONE", flush=True)
     sys.exit(0)
 
+if args.phase == "adjudicate":
+    # Held-out simple-regret evaluation (user review 2026-08-07): the reference table's
+    # argmax carries winner's curse; re-evaluate the reference-selected action AND every
+    # arm's chosen action with a FRESH high-precision CRN evaluation (different seed).
+    # regret(arm,B) = fresh(ref_argmax) - fresh(chosen) — held-out, curse-free.
+    ref = {}
+    for f in OUT.glob("ref_shard*.jsonl"):
+        for l in f.read_text().splitlines():
+            r = json.loads(l); ref[r["sid"]] = r
+    rows = []
+    for f in list(OUT.glob("flat_shard*.jsonl")) + list(OUT.glob("tree_shard*.jsonl")):
+        rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+    out_path = OUT / f"adj_shard{args.shard_id}.jsonl"
+    done = {json.loads(l)["sid"] for l in out_path.read_text().splitlines()} if out_path.exists() else set()
+    for sid in range(len(SX)):
+        if sid % args.num_shards != args.shard_id or sid in done or sid not in ref:
+            continue
+        x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
+        idxs = {int(np.argmax(ref[sid]["ref"]))}
+        for r in rows:
+            if r["sid"] == sid:
+                idxs |= {int(v) for v in r["chosen_idx"].values()}
+        idxs = sorted(idxs)
+        rng = np.random.default_rng(999_000 + sid)          # fresh seed vs ref phase
+        vals, ses = ref_value(x, c, pool[idxs], k_root=128, n_opp=64, k_opp=16, rng=rng)
+        rec = {"sid": sid, "ref_argmax": int(np.argmax(ref[sid]["ref"])),
+               "held": {str(i): round(float(v), 4) for i, v in zip(idxs, vals)},
+               "held_se": round(float(np.mean(ses)), 4)}
+        with out_path.open("a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        print(f"[adj] sid {sid}: {len(idxs)} actions re-evaluated (se~{rec['held_se']})", flush=True)
+    print("EXP066_ADJ_SHARD_DONE", flush=True)
+    sys.exit(0)
+
 if args.phase == "tree":
     from world.search.hybrid_tree import HybridTree
+    # PRIMARY correctness arms (user review 2026-08-07): TERMINAL leaves only at h=2 —
+    # no value head anywhere, so a failure is attributable to the tree, not V.
+    # puct_term: bw->0 disables kernel sharing => plain prior-guided PUCT (diagnosis arm).
+    # hybrid_v (V-leaf) is parked as the secondary practical-speed arm.
+    TREE_ARMS = {"hybrid_term": dict(bw=1.0, rollout_every=1),
+                 "puct_term":  dict(bw=1e-9, rollout_every=1)}
     out_path = OUT / f"tree_shard{args.shard_id}.jsonl"
     done = set()
     if out_path.exists():
-        done = {json.loads(l)["sid"] for l in out_path.read_text().splitlines()}
+        done = {(json.loads(l)["sid"], json.loads(l)["arm"]) for l in out_path.read_text().splitlines()}
 
     def sample_fn(x, c, n):
         return np.asarray(_sample_actions(policy, amean_t, astd_t, x, c, n, device,
@@ -341,19 +393,22 @@ if args.phase == "tree":
             st, cc, hh = post[0], env_bridge.next_condition(cc, 10), hh - 1
         return float(env_bridge.score_end(st, persp))
 
-    for sid in range(len(SX)):
-        if sid % args.num_shards != args.shard_id or sid in done:
+    jobs = [(sid, arm) for sid in range(len(SX)) for arm in TREE_ARMS]
+    for j, (sid, arm) in enumerate(jobs):
+        if j % args.num_shards != args.shard_id or (sid, arm) in done:
             continue
         x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
         prior = np.concatenate([np.full(POOL_POLICY, 0.8 / POOL_POLICY),
                                 np.full(len(pool) - POOL_POLICY, 0.2 / max(len(pool) - POOL_POLICY, 1))])
         rng = np.random.default_rng(args.seed * 17 + sid)
+        kw = TREE_ARMS[arm]
         tree = HybridTree(x, c, H, 10, pool, prior, sample_fn=sample_fn, value_fn=value_fn,
-                          rollout_fn=rollout_fn, noise=NZ, rng=rng)
+                          rollout_fn=rollout_fn, noise=NZ, rng=rng,
+                          bw=kw["bw"], rollout_every=kw["rollout_every"])
         picks = tree.run(BUDGETS)
         chosen = {str(B): nearest_pool_idx(pool, a) for B, a in picks.items()}
         with out_path.open("a") as fh:
-            fh.write(json.dumps({"sid": sid, "arm": "hybrid_tree", "chosen_idx": chosen}) + "\n")
-        print(f"[tree] sid {sid} done ({tree.budget.sims} sims)", flush=True)
+            fh.write(json.dumps({"sid": sid, "arm": arm, "chosen_idx": chosen}) + "\n")
+        print(f"[tree] sid {sid} {arm} done ({tree.budget.sims} sims)", flush=True)
     print("EXP066_TREE_SHARD_DONE", flush=True)
     sys.exit(0)
