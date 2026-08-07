@@ -10,9 +10,9 @@ const S = {
   mode: "draw", hitAct: "remove", target: null, hitSlot: null, tapTarget: null,
   heat: null, busy: false, replay: null, step: 0, solved: null,
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
-  rHeatOn: false, rHeatCache: {},
+  rHeatOn: false, rHeatCache: {}, pendingAdvance: null,
 };
-const APP_VERSION = "2.1.8";
+const APP_VERSION = "2.2.1";
 const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
 const REPLAY_RATE = 6;
 const _tele = [];
@@ -417,10 +417,43 @@ function boardTapped(al, la) {
     S.solved = null;
   }
   renderGame();
+  if (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget))
+    autoPreviewHit();
+}
+
+let _previewSeq = 0;
+async function autoPreviewHit() {
+  // hit shots are physics-constrained (the struck stone can only leave along a
+  // contact line) — solve immediately and SHOW the predicted result before the
+  // user commits; the Throw then replays the solved action exactly.
+  const seq = ++_previewSeq;
+  $("hint").textContent = "Working out the shot…";
+  $("throwBtn").disabled = true;
+  try {
+    const d = await api(`/api/match/${S.match.id}/solve`, { method: "POST", body: shotBody(true) });
+    if (seq !== _previewSeq) return;             // selection changed meanwhile
+    S.solved = d;
+    renderGame();
+    if (S.hitAct === "remove") {
+      $("hint").textContent = d.solver?.removed === false
+        ? "⚠️ Hard to remove from here — it may survive. Throw anyway or pick another stone."
+        : "Looks good — the stone comes out. Throw when ready.";
+    } else {
+      const err = d.solver?.achieved_error_m;
+      $("hint").textContent = err == null ? "Ready — Throw when ready."
+        : err > 0.8 ? `⚠️ That spot is hard to reach — it would land ~${err.toFixed(1)} m away (see outline). Adjust or throw anyway.`
+        : `It would land ~${Math.round(err * 100)} cm from your spot (see outline). Throw when ready.`;
+    }
+    $("throwBtn").disabled = !humanOnTurn();
+  } catch (e) {
+    if (seq === _previewSeq) { $("hint").textContent = e.message; }
+  }
 }
 
 function shotBody(preview) {
   const side = S.match.turn.team;
+  if (!preview && S.mode === "hit" && S.solved?.intended)
+    return { side, type: "params", action: S.solved.intended };   // throw the previewed shot
   if (S.mode === "draw") return { side, type: "draw", target: S.target, preview };
   if (S.hitAct === "remove") return { side, type: "after_contact", stone_slot: S.hitSlot, remove: true, preview };
   return { side, type: "after_contact", stone_slot: S.hitSlot, target: S.tapTarget, preview };
@@ -428,23 +461,24 @@ function shotBody(preview) {
 
 async function doThrow() {
   if (S.busy) return;
-  S.busy = true; busyShow("Throwing…");
+  S.busy = true;
+  $("hint").textContent = "Delivering…";
+  $("throwBtn").disabled = true;
   try {
-    const d = await api(`/api/match/${S.match.id}/throw`, { method: "POST", body: shotBody(false) });
-    busyHide();                                  // overlay only while waiting, never over motion
+    const body = shotBody(false);
+    body.auto_reply = false;                     // opponent thinks AFTER our stone lands
+    const d = await api(`/api/match/${S.match.id}/throw`, { method: "POST", body });
     await animateThrow($("board"), d.result);
-    for (const rep of d.replies || []) {
-      toast((S.match.labels?.B || "Champion") + " replies…", 1400);
-      await animateThrow($("board"), rep);
-      if (rep.end_result) announceEnd(rep.end_result);
+    if (d.result?.end_result) {
+      holdEnd(d.match, d.result.end_result.end, d.result.end_result.score, d.result.board);
+    } else {
+      S.match = d.match; S.seenThrows = countThrows(d.match);
+      resetShot(); renderGame();
+      S.busy = false;
+      await championIfOnTurn();
     }
-    if (d.result?.end_result) announceEnd(d.result.end_result);
-    S.match = d.match; S.seenThrows = countThrows(d.match);
-    resetShot(); renderGame();
-    if (d.match.status === "finished") matchOver();
-    else maybePowerPlay();
   } catch (e) { toast(e.message, 4200); }
-  finally { S.busy = false; busyHide(); renderGame(); }
+  finally { S.busy = false; busyHide(); if (!S.pendingAdvance) renderGame(); }
 }
 async function doPreview() {
   try {
@@ -457,18 +491,39 @@ async function doPreview() {
   } catch (e) { toast(e.message, 4000); }
 }
 
-function announceEnd(er) {
-  if (!er || !er.score) return;
-  const t = er.score.team, p = er.score.points;
-  const name = S.match && S.match.labels ? (S.match.labels[t] || TEAM_NAME[t]) : TEAM_NAME[t];
-  toast(t ? `End ${er.end}: ${name} scores ${p}` : `End ${er.end}: blanked`, 3800);
+/* Hold at end-of-end: freeze the completed end's final board and wait for the
+   user's "Next end" tap before advancing to the new pre-placement. */
+function holdEnd(newMatch, endNo, score, finalBoard) {
+  S.pendingAdvance = newMatch;
+  if (finalBoard) drawBoard($("board"), finalBoard, {});
+  $("scA").textContent = newMatch.totals.A; $("scB").textContent = newMatch.totals.B;
+  const finished = newMatch.status === "finished";
+  const name = score && score.team
+    ? (newMatch.labels?.[score.team] || TEAM_NAME[score.team]) : null;
+  $("endTitle").textContent = `End ${endNo} complete`;
+  const verb = name === "You" ? "score" : "scores";
+  $("endBody").textContent = (name ? `${name} ${verb} ${score.points}.` : "Blank end — no score.") +
+    `  (${newMatch.totals.A} : ${newMatch.totals.B})`;
+  $("nextEndBtn").textContent = finished ? "Final result ▶" : "Next end ▶";
+  $("statusbar").innerHTML = `<b>End ${endNo} complete</b>`;
+  $("endModal").classList.remove("hidden");
+}
+async function advanceEnd() {
+  $("endModal").classList.add("hidden");
+  const m = S.pendingAdvance;
+  S.pendingAdvance = null;
+  if (!m) return;
+  S.match = m; S.seenThrows = countThrows(m);
+  resetShot(); renderGame();
+  if (m.status === "finished") matchOver();
+  else await maybePowerPlay();
 }
 function matchOver() {
   stopPolling();
   const m = S.match;
   const la = m.labels?.A || TEAM_NAME.A, lb = m.labels?.B || TEAM_NAME.B;
   const w = m.totals.A > m.totals.B ? la : m.totals.B > m.totals.A ? lb : null;
-  $("overTitle").textContent = w ? `🏆 ${w} wins!` : "Tied match";
+  $("overTitle").textContent = w ? (w === "You" ? "🏆 You win!" : `🏆 ${w} wins!`) : "Tied match";
   $("overBody").textContent = `Final score ${m.totals.A} : ${m.totals.B} over ${m.ends_scheduled} ends.`;
   $("overModal").classList.remove("hidden");
 }
@@ -487,19 +542,27 @@ async function maybePowerPlay() {
 async function championIfOnTurn() {
   const m = S.match;
   if (m.status === "in_progress" && m.players[m.turn.team] === "champion") {
-    S.busy = true; busyShow("Champion is thinking…");
+    S.busy = true;
+    busyShow(m.players[m.turn.team] === "champion" ? "Champion thinking…" : "Opponent thinking…");
     try {
       const d = await api(`/api/match/${m.id}/champion_move`, { method: "POST", body: {} });
       busyHide();
       await animateThrow($("board"), d.result);
-      for (const rep of d.replies || []) await animateThrow($("board"), rep);
-      if (d.result?.end_result) announceEnd(d.result.end_result);
-      S.match = d.match; S.seenThrows = countThrows(d.match);
-      resetShot();
-      if (d.match.status === "finished") matchOver();
-      else maybePowerPlay();
+      let er = d.result?.end_result, board = d.result?.board;
+      for (const rep of d.replies || []) {
+        await animateThrow($("board"), rep);
+        if (rep.end_result) { er = rep.end_result; board = rep.board; }
+      }
+      if (er) {
+        holdEnd(d.match, er.end, er.score, board);
+      } else {
+        S.match = d.match; S.seenThrows = countThrows(d.match);
+        resetShot();
+        if (d.match.status === "finished") matchOver();
+        else maybePowerPlay();
+      }
     } catch (e) { if (!/not on turn/.test(e.message)) toast(e.message); }
-    finally { S.busy = false; busyHide(); renderGame(); }
+    finally { S.busy = false; busyHide(); if (!S.pendingAdvance) renderGame(); }
   }
 }
 async function choosePP(wing) {
@@ -543,9 +606,17 @@ async function pollOnce() {
           } catch (err) { /* skip animation, still update */ }
         }
         S.seenThrows = newCount;
-        S.match = d.match; resetShot(); renderGame();
-        if (d.match.status === "finished") matchOver();
-        else maybePowerPlay();
+        const prevEnds = S.match.ends.length;
+        if (d.match.ends.length > prevEnds || d.match.status === "finished") {
+          const doneEnd = d.match.ends.length > prevEnds
+            ? d.match.ends[prevEnds - 1] : d.match.ends[d.match.ends.length - 1];
+          const board = doneEnd.state
+            ? null : null;   // board already drawn by the last animation
+          holdEnd(d.match, prevEnds, doneEnd.score, board);
+        } else {
+          S.match = d.match; resetShot(); renderGame();
+          maybePowerPlay();
+        }
       } finally {
         S.busy = false;                          // a stuck busy here used to kill the UI
         busyHide();
@@ -677,6 +748,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("heatBtn").onclick = loadHeat;
   document.querySelectorAll(".ppchoice").forEach((b) => b.onclick = () => choosePP(b.dataset.w));
   $("ppSkip").onclick = () => choosePP(null);
+  $("nextEndBtn").onclick = advanceEnd;
   $("overHome").onclick = () => { $("overModal").classList.add("hidden"); show("home"); };
   $("overReplay").onclick = () => { $("overModal").classList.add("hidden"); openReplay(S.match.id); };
   $("replayBack").onclick = () => show("home");
