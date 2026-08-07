@@ -12,7 +12,7 @@ const S = {
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {}, pendingAdvance: null,
 };
-const APP_VERSION = "2.2.1";
+const APP_VERSION = "2.2.2";
 const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
 const REPLAY_RATE = 6;
 const _tele = [];
@@ -69,23 +69,27 @@ function toast(msg, ms = 2600) {
 }
 
 /* ---------------- board rendering ---------------- */
-const VIEW = { latHalf: 2.55, alongTop: -4.7, alongBot: 2.45 };
+const VIEW = { latHalf: 2.55, alongTop: -6.9, alongBot: 2.45 };
 const TEAM_FILL = { A: "#d33a2f", B: "#e8b71a" };
 const TEAM_NAME = { A: "Red", B: "Yellow" };
 const RINGS = [[1.83, "#3f7fbf"], [1.22, "#f5f7f9"], [0.61, "#d24646"], [0.15, "#f5f7f9"]];
 
 function setupCanvas(cv) {
   const dpr = window.devicePixelRatio || 1;
-  const w = cv.clientWidth;
-  const h = w * (VIEW.alongBot - VIEW.alongTop) / (2 * VIEW.latHalf);
-  cv.style.height = h + "px";
+  const ratio = (VIEW.alongBot - VIEW.alongTop) / (2 * VIEW.latHalf);
+  const parentW = (cv.parentElement ? cv.parentElement.clientWidth : cv.clientWidth) || cv.clientWidth;
+  const maxH = Math.max(420, (window.innerHeight || 900) * 0.78);
+  let w = parentW, h = w * ratio;
+  if (h > maxH) { h = maxH; w = h / ratio; }         // tall view: fit the screen
+  cv.style.width = w + "px"; cv.style.height = h + "px";
+  cv.style.marginLeft = "auto"; cv.style.marginRight = "auto";
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
   const ctx = cv.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return ctx;
 }
 function mkMap(cv) {
-  const w = cv.clientWidth, ppm = w / (2 * VIEW.latHalf);
+  const w = parseFloat(cv.style.width) || cv.clientWidth, ppm = w / (2 * VIEW.latHalf);
   return {
     px: (lat) => (lat + VIEW.latHalf) * ppm,
     py: (along) => (along - VIEW.alongTop) * ppm,
@@ -107,7 +111,7 @@ function heatColor(v, lo, mid, hi) {
 }
 function drawBoard(cv, board, opts = {}) {
   const ctx = setupCanvas(cv), m = mkMap(cv);
-  const w = cv.clientWidth, h = parseFloat(cv.style.height);
+  const w = parseFloat(cv.style.width) || cv.clientWidth, h = parseFloat(cv.style.height);
   ctx.fillStyle = "#eef4fa"; ctx.fillRect(0, 0, w, h);
   for (const [r, col] of RINGS) {
     ctx.beginPath(); ctx.arc(m.px(0), m.py(0), r * m.ppm, 0, 2 * Math.PI);
@@ -130,10 +134,13 @@ function drawBoard(cv, board, opts = {}) {
         }
     }
   }
+  const w2 = parseFloat(cv.style.width);
   ctx.strokeStyle = "rgba(40,70,110,.25)"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(m.px(0), 0); ctx.lineTo(m.px(0), h); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, m.py(0)); ctx.lineTo(w, m.py(0)); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, m.py(-1.974)); ctx.lineTo(w, m.py(-1.974)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, m.py(0)); ctx.lineTo(w2, m.py(0)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, m.py(-1.974)); ctx.lineTo(w2, m.py(-1.974)); ctx.stroke();
+  ctx.strokeStyle = "rgba(178,60,60,.5)"; ctx.lineWidth = 2.5;       // hog line
+  ctx.beginPath(); ctx.moveTo(0, m.py(-6.4)); ctx.lineTo(w2, m.py(-6.4)); ctx.stroke();
   if (opts.traj && opts.traj.frames && opts.traj.frames.length > 1) {
     const slot = opts.traj.stone_slot;
     ctx.save(); ctx.setLineDash([9, 7]); ctx.lineWidth = 2.5;

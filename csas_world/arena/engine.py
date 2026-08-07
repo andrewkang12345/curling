@@ -616,7 +616,7 @@ def placement_heatmap(m: "Match", res: float = 0.15,
     if not free:
         raise ValueError("no stones left for the team on turn")
     slot = free[0]
-    alongs = np.round(np.arange(-4.0, 2.201, res), 4)
+    alongs = np.round(np.arange(-6.2, 2.201, res), 4)
     lats = np.round(np.arange(-2.25, 2.251, res), 4)
     occupied = ([(float(cm[0]), float(cm[1])) for cm in raw_to_compact_m(raw)[live]]
                 if live.any() else [])
