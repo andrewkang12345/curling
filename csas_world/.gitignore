@@ -16,3 +16,4 @@ nohup.out
 arena/matches/
 arena/cache/
 arena/server.pid
+arena/client_log.jsonl
