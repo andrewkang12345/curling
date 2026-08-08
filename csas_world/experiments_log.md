@@ -2227,3 +2227,12 @@ hybrid_v run for deployment cost; (b) h>2 validation (the reference is only exac
 than the deployed selector at matched budget. NOTE the cost: 64k sims ~ 172 min/state
 sequential; a batched/vectorised tree is a prerequisite for using it in collection.
 game-level ceiling <=> all arms' 64k regret ~ reference noise floor.
+EXP-068 h=4 (4-ply): 30 states adjudicated, 90 arm rows
+held-out: paired champion-continuation playouts T=64 (CRN)
+
+  flat_width   B=1k: +0.3370±0.0565   B=4k: +0.2932±0.0595   B=16k: +0.2589±0.0617
+  vec_tree     B=1k: +0.4531±0.0741   B=4k: +0.3135±0.0565   B=16k: +0.2990±0.0591
+  ref(64k)     +0.1906±0.0412  (yardstick, not an arm)
+
+validation: AGGREGATE regret must fall with budget (within SEs);
+tree beating flat_width at 16k reproduces the EXP-066 finding at depth.

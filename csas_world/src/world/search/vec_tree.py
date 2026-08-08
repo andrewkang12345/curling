@@ -90,7 +90,8 @@ class VecTree:
                  sample_batch_fn: Callable, rollout_batch_fn: Callable,
                  noise, rng, c_puct: float = 1.5, bw: float = 1e-9,
                  min_evidence: int = 8, out_cap: int = 8, inner_pool: int = 8,
-                 max_depth: int = 4, wave: int = 32):
+                 max_depth: int = 4, wave: int = 32, root_out_cap: int = 0,
+                 rollout_mult: int = 1):
         self.sie = int(sie)
         self.sample_batch_fn = sample_batch_fn   # (states[B,24], cond[3], n) -> [B,n,4]
         self.rollout_batch_fn = rollout_batch_fn  # (states[B,24], cond[3], h, persp) -> [B]
@@ -98,6 +99,11 @@ class VecTree:
         self.c_puct, self.bw = float(c_puct), float(bw)
         self.min_evidence, self.out_cap = int(min_evidence), int(out_cap)
         self.inner_pool, self.max_depth, self.wave = int(inner_pool), int(max_depth), int(wave)
+        # EXP-069 adjudicator: the ROOT chance node integrates over many more execution
+        # outcomes (the root expectation is the quantity being reported), and rollout
+        # cost is multiplied when the tail policy itself searches (value-greedy steps).
+        self.root_out_cap = int(root_out_cap) if root_out_cap else int(out_cap)
+        self.rollout_mult = max(1, int(rollout_mult))
         self.root_persp = int(round(c[2]))
         self.budget = _Budget()
         self.root = _Dec(np.asarray(x, np.float32), np.asarray(c, np.float32), int(h), 0)
@@ -139,7 +145,8 @@ class VecTree:
             if ch is None:
                 ch = node.chance[i] = _Chance(node.pool[i])
             node.edge_vl[i] += 1.0
-            allowed = min(self.out_cap, int(sum(ch.out_n) + sum(ch.out_vl)) + 1)
+            cap = self.root_out_cap if node is self.root else self.out_cap
+            allowed = min(cap, int(sum(ch.out_n) + sum(ch.out_vl)) + 1)
             if len(ch.outcomes) < allowed:
                 path.append((node, i, ch, None))
                 return path, "expand", (node, ch)
@@ -205,7 +212,7 @@ class VecTree:
             states = np.stack([targets[i].x for i in idxs])
             cond = targets[idxs[0]].c
             out = self.rollout_batch_fn(states, cond, h_g, self.root_persp)
-            self.budget.sims += len(idxs) * h_g         # lockstep rollout: h sims per state
+            self.budget.sims += len(idxs) * h_g * self.rollout_mult
             for k, i in enumerate(idxs):
                 vals[i] = float(out[k])
 
@@ -228,6 +235,14 @@ class VecTree:
             self._backup(path, vals[idx])
 
     # ------------------------------------------------------------------ #
+    def root_value(self) -> float:
+        """Backed-up value of the root in ROOT perspective — with a single forced root
+        action this IS E_noise[ value of that action under strong play by both sides ]."""
+        n = self.root.edge_n[: self.root.n_open]
+        s = self.root.edge_sum[: self.root.n_open]
+        tot = float(n.sum())
+        return float(s.sum() / tot) if tot > 0 else 0.0
+
     def best_action(self) -> np.ndarray:
         k = self.root.n_open
         V, W = _kr(self.root.pool[:k].astype(np.float64),

@@ -43,7 +43,7 @@ from world.config import Config, load_config
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--phase", required=True,
-                choices=["states", "search", "adjudicate", "aggregate", "validate_h2"])
+                choices=["states", "search", "adjudicate", "adj_strong", "aggregate", "validate_h2"])
 ap.add_argument("--horizon", type=int, default=4)
 ap.add_argument("--config", default="configs/exp_037_sig_screen_tree.yaml")
 ap.add_argument("--policy", default="checkpoints/csas_world/az_v15_L8/incumbent0_policy_csas.pt")
@@ -58,6 +58,9 @@ ap.add_argument("--device", default="cuda:0")
 ap.add_argument("--out-dir", default="eval_out/exp068_deep")
 ap.add_argument("--num-shards", type=int, default=1)
 ap.add_argument("--shard-id", type=int, default=0)
+ap.add_argument("--adj-budget", type=int, default=32000, help="adj_strong: sims per forced-action search")
+ap.add_argument("--adj-depth", type=int, default=6, help="adj_strong: search depth (both sides)")
+ap.add_argument("--adj-nsearch", type=int, default=4, help="adj_strong: value-greedy tail strength")
 ap.add_argument("--seed", type=int, default=68)
 args = ap.parse_args()
 
@@ -69,44 +72,46 @@ POOL_POLICY, POOL_EXTRA = 96, 32
 
 # ------------------------------------------------------------------ aggregate #
 def aggregate():
-    rows, adj = [], {}
+    rows, adj, adjs = [], {}, {}
     for f in OUT.glob("search_shard*.jsonl"):
         rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
     for f in OUT.glob("adj_shard*.jsonl"):
         for l in f.read_text().splitlines():
             r = json.loads(l)
             adj[r["sid"]] = r
+    for f in OUT.glob("adjs_shard*.jsonl"):
+        for l in f.read_text().splitlines():
+            r = json.loads(l)
+            adjs[r["sid"]] = r
     if not rows or not adj:
         print(f"incomplete: {len(rows)} search rows, {len(adj)} adjudicated states")
         return
-    print(f"EXP-068 h={args.horizon} ({args.max_depth}-ply): {len(adj)} states adjudicated, "
-          f"{len(rows)} arm rows")
-    print(f"held-out: paired champion-continuation playouts T={args.playouts} (CRN)\n")
-    for arm in sorted(set(r["arm"] for r in rows if r["arm"] != "ref")):
-        line = []
-        for B in BUDGETS:
-            rs = []
-            for r in rows:
-                if r["arm"] != arm or str(B) not in r["chosen_idx"]:
-                    continue
-                a = adj.get(r["sid"])
-                ci = str(r["chosen_idx"][str(B)])
-                if a and ci in a["held"]:
-                    rs.append(float(max(a["held"].values()) - a["held"][ci]))
-            if rs:
-                line.append(f"B={B//1000}k: {np.mean(rs):+.4f}±{np.std(rs)/math.sqrt(len(rs)):.4f}")
-        print(f"  {arm:12s} " + "   ".join(line))
-    rs = []
-    for r in rows:
-        if r["arm"] != "ref":
-            continue
-        a = adj.get(r["sid"])
-        ci = str(r["chosen_idx"][str(args.ref_budget)])
-        if a and ci in a["held"]:
-            rs.append(float(max(a["held"].values()) - a["held"][ci]))
-    if rs:
-        print(f"  {'ref(64k)':12s} {np.mean(rs):+.4f}±{np.std(rs)/math.sqrt(len(rs)):.4f}  "
-              f"(yardstick, not an arm)")
+    print(f"EXP-068 h={args.horizon} ({args.max_depth}-ply): {len(rows)} arm rows")
+
+    def report(table, label):
+        if not table:
+            return
+        print(f"\n-- REGRET under {label} ({len(table)} states) --")
+        for arm in sorted(set(r["arm"] for r in rows)):
+            line = []
+            bl = [args.ref_budget] if arm == "ref" else BUDGETS
+            for B in bl:
+                rs = []
+                for r in rows:
+                    if r["arm"] != arm or str(B) not in r["chosen_idx"]:
+                        continue
+                    a = table.get(r["sid"])
+                    ci = str(r["chosen_idx"][str(B)])
+                    if a and ci in a["held"]:
+                        rs.append(float(max(a["held"].values()) - a["held"][ci]))
+                if rs:
+                    line.append(f"B={B//1000}k: {np.mean(rs):+.4f}±{np.std(rs)/math.sqrt(len(rs)):.4f}")
+            tag = "  (yardstick)" if arm == "ref" else ""
+            print(f"  {arm:12s} " + "   ".join(line) + tag)
+
+    report(adjs, f"STRONG-PLAY adjudication (forced root action, then {args.adj_depth}-ply "
+                 f"minimax search BOTH SIDES @ {args.adj_budget//1000}k sims + value-greedy tail) [PRIMARY]")
+    report(adj, f"champion-continuation playouts T={args.playouts} CRN [secondary: deployment value]")
     print("\nvalidation: AGGREGATE regret must fall with budget (within SEs);")
     print("tree beating flat_width at 16k reproduces the EXP-066 finding at depth.")
 
@@ -290,6 +295,50 @@ if args.phase == "search":
             fh.write(json.dumps({"sid": sid, "arm": arm, "chosen_idx": chosen}) + "\n")
         print(f"[search] h{h} sid {sid} {arm} done", flush=True)
     print("EXP068_SEARCH_SHARD_DONE", flush=True)
+    sys.exit(0)
+
+
+# ------------------------------------------------------------------ adj_strong #
+if args.phase == "adj_strong":
+    """User-specified adjudicator (2026-08-08): the value of a candidate action is its
+    value under STRONG PLAY BY BOTH SIDES. Fix the root action, then run a deeper,
+    bigger-budget minimax stochastic search (both sides best-respond inside the tree;
+    value-greedy tail beyond the depth cap) and report the root's backed-up value.
+    Estimand-neutral w.r.t. the arms' internal models — it is the game value, not the
+    value against one particular opponent."""
+    def rollout_strong(states, cond, h, persp):
+        rng = np.random.default_rng(int(args.seed) + 77)
+        return _mc_rollout_terminal_batch(policy, amean_t, astd_t, np.asarray(states, np.float32),
+                                          np.asarray(cond, np.float32), int(h), SIE, int(persp),
+                                          device, rng, NZ, cfg.rollout_temp, cfg.std_scale,
+                                          value_model=VMODEL, n_search=args.adj_nsearch)
+    rows = []
+    for f in OUT.glob("search_shard*.jsonl"):
+        rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+    out_path = OUT / f"adjs_shard{args.shard_id}.jsonl"
+    done = {json.loads(l)["sid"] for l in out_path.read_text().splitlines()} if out_path.exists() else set()
+    for sid in range(len(SX)):
+        if sid % args.num_shards != args.shard_id or sid in done:
+            continue
+        x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
+        idxs = sorted({int(v) for r in rows if r["sid"] == sid for v in r["chosen_idx"].values()})
+        if not idxs:
+            continue
+        held = {}
+        for i in idxs:
+            tree = VecTree(x, c, args.horizon, SIE, pool[i][None], np.array([1.0]),
+                           sample_batch_fn=sample_batch_fn, rollout_batch_fn=rollout_strong,
+                           noise=NZ, rng=np.random.default_rng(args.seed * 91 + sid * 13 + i),
+                           max_depth=min(args.adj_depth, args.horizon), wave=args.wave,
+                           root_out_cap=64, rollout_mult=args.adj_nsearch, inner_pool=12)
+            tree.run([args.adj_budget])
+            held[str(i)] = round(tree.root_value(), 4)
+        with out_path.open("a") as fh:
+            fh.write(json.dumps({"sid": sid, "held": held,
+                                 "spread": round(float(max(held.values()) - min(held.values())), 4)}) + "\n")
+        print(f"[adjs] h{args.horizon} sid {sid}: {len(idxs)} actions @ "
+              f"{args.adj_budget//1000}k strong-search each", flush=True)
+    print("EXP068_ADJS_SHARD_DONE", flush=True)
     sys.exit(0)
 
 
