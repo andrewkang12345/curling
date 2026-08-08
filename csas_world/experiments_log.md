@@ -2140,6 +2140,22 @@ self-improvement engine this project spent a month proving self-play could not b
 returns parity, one BR step was a one-time harvest of the symmetric loop's blind spot —
 either answer sets the roadmap.
 
+**EXP-067 VERDICT (2026-08-08): THE LEAGUE DOES NOT COMPOUND — one BR generation was a
+one-time harvest.** Draw 1 +0.0472 ± 0.0269 (t=1.75; the earlier +0.0592 read was a partial
+shard set), draw 2 **+0.0032 ± 0.0367** — classic regression to the mean. **POOLED:
++0.0252 ± 0.0227/end, t=+1.11** — fails the pre-registered 2.1 bar. Winrate 0.487/0.489
+(<0.5 both draws) while dScore leans positive: az_v26_br2 scores bigger but wins fewer
+ends — a variance shift, not strength. NO PROMOTION; **az_v25_br remains champion.**
+
+**Reading.** BR-vs-v14d worked because v14d had accumulated exploitable habits over many
+symmetric generations; az_v25_br — itself a fresh best response — has far less such
+surface after one generation. The league ratchet therefore does NOT self-sustain at this
+cadence: iteration 1 harvested the symmetric loop's blind spot; iteration 2 found little
+left. This does not close PSRO (a true league would mix over a POPULATION, not chain
+single best responses, and the population arm is untested), but it does close the naive
+"BR-chain as perpetual improvement engine" hypothesis. Champion history: az_v14d
+(2026-07-16) -> az_v25_br (2026-08-06) -> unchanged.
+
 **EXP-063 raw eval aggregates (auto-appended):**
 
 - vsinc_k4: winrate 0.4871, dScore +0.0592 ± 0.0269/end (n=2516)
