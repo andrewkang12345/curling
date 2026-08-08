@@ -2139,3 +2139,75 @@ confirmation if certified. If iteration 2 also certifies, the BR/league loop is 
 self-improvement engine this project spent a month proving self-play could not be; if it
 returns parity, one BR step was a one-time harvest of the symmetric loop's blind spot —
 either answer sets the roadmap.
+
+**EXP-063 raw eval aggregates (auto-appended):**
+
+- vsinc_k4: winrate 0.4871, dScore +0.0592 ± 0.0269/end (n=2516)
+regret source: HELD-OUT fresh evaluation (30 states; curse-free)
+EXP-066 search-validation: 60 states, 184 arm rows
+reference precision: median top-16 SE = 0.0380/end
+
+common-subset comparison: 30 states covered by all arms
+== flat_width
+   [all     ] B=1k: +0.3544±0.0746   B=4k: +0.3016±0.0658   B=16k: +0.3998±0.0756   B=64k: +0.3912±0.0732
+   [tactical] B=1k: +0.3544±0.0746   B=4k: +0.3016±0.0658   B=16k: +0.3998±0.0756   B=64k: +0.3912±0.0732
+   [control ] 
+
+== hybrid_term
+   [all     ] B=1k: +0.4571±0.0558   B=4k: +0.3589±0.0550   B=16k: +0.2649±0.0479   B=64k: +0.2656±0.0479
+   [tactical] B=1k: +0.4571±0.0558   B=4k: +0.3589±0.0550   B=16k: +0.2649±0.0479   B=64k: +0.2656±0.0479
+   [control ] 
+
+== hybrid_v_partial
+   [all     ] B=1k: +0.2813±0.1735   B=4k: +0.2816±0.1470   B=16k: +0.1438±0.0925   B=64k: +0.1814±0.1248
+   [tactical] B=1k: +0.2813±0.1735   B=4k: +0.2816±0.1470   B=16k: +0.1438±0.0925   B=64k: +0.1814±0.1248
+   [control ] 
+
+== puct_term
+   [all     ] B=1k: +0.4683±0.0657   B=4k: +0.3563±0.0544   B=16k: +0.2476±0.0396   B=64k: +0.2499±0.0405
+   [tactical] B=1k: +0.4683±0.0657   B=4k: +0.3563±0.0544   B=16k: +0.2476±0.0396   B=64k: +0.2499±0.0405
+   [control ] 
+
+== screen_tree
+   [all     ] B=1k: +0.6167±0.0769   B=4k: +0.6710±0.0835   B=16k: +0.5735±0.0733   B=64k: +0.6710±0.0929
+   [tactical] B=1k: +0.6167±0.0769   B=4k: +0.6710±0.0835   B=16k: +0.5735±0.0733   B=64k: +0.6710±0.0929
+   [control ] 
+
+verdict rule: sound implementation <=> AGGREGATE mean regret decreases in B (within SEs —
+per-state non-monotonicity is expected variance);
+
+**EXP-066 VERDICT (2026-08-08): SEARCH IS VALIDATED, AND IT WINS — the historical trees
+were broken, not the idea.** Held-out (curse-free) simple regret, 30 common states,
+all tactical (the h=2 hot-prefix generator produced only congested boards — control
+stratum empty; a scope limit, noted):
+
+  arm            1k       4k      16k      64k     monotone?
+  hybrid_term  0.457 -> 0.359 -> 0.265 -> 0.266     YES (-42%, plateaus at 16k)
+  puct_term    0.468 -> 0.356 -> 0.248 -> 0.250     YES (-47%, plateaus at 16k)
+  flat_width   0.354 -> 0.302 -> 0.400 -> 0.391     NO  (non-monotone, ends WORSE)
+  screen_tree  0.617 -> 0.671 -> 0.574 -> 0.671     NO  (flat/erratic — the operator of
+                                                     record is the WORST arm here)
+
+1. SOUNDNESS CERTIFIED: both correctly-structured trees show clean, statistically monotone
+   regret reduction with budget (~-45%), the criterion the user pre-registered. The
+   EXP-053/055 nulls are hereby scoped to OUR OLD IMPLEMENTATIONS (one noise draw per
+   visit, no chance nodes, static branching), exactly as the user argued.
+2. TREES BEAT FLAT AT SCALE: at 64k, tree regret 0.25-0.27 vs flat 0.39 (Δ≈0.13-0.14/end,
+   ~2·SE) and vs screen_tree 0.67. At 1k flat is better (0.35 vs 0.46) — trees need
+   evidence before they pay, which is precisely why every historical low-budget test
+   found them worthless.
+3. PUCT ≈ hybrid (0.250 vs 0.266, well within SEs): kernel sharing neither helps nor
+   oversmooths at this pool size — prior-guided ADAPTIVE ALLOCATION is the active
+   ingredient, not continuous-action generalization.
+4. FLAT_WIDTH IS NON-MONOTONE (0.30 -> 0.40 at 16k): more width without more depth
+   makes it WORSE — a direct measurement of the EXP-061 winner's-curse mechanism.
+5. hybrid_v_partial (V-leaf, 4 legacy states) trends lower still but n=4; the V-leaf
+   variant is now worth a full run as the practical-speed arm.
+
+**CONSEQUENCE — the search program REOPENS.** Both prior closures (EXP-053-055 depth,
+EXP-056-059 estimator) were implementation-scoped, not game-scoped. Next: (a) full
+hybrid_v run for deployment cost; (b) h>2 validation (the reference is only exact at h=2);
+(c) tree-as-teacher — its targets are now the first operator ever measured strictly better
+than the deployed selector at matched budget. NOTE the cost: 64k sims ~ 172 min/state
+sequential; a batched/vectorised tree is a prerequisite for using it in collection.
+game-level ceiling <=> all arms' 64k regret ~ reference noise floor.
