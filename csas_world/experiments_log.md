@@ -1908,7 +1908,59 @@ the monotonicity criterion are unchanged.
    clean 2x2 diagnosis: PUCT>hybrid => kernel oversmooths; hybrid>PUCT => continuous
    sharing helps; both>flat => adaptive allocation matters; neither>flat => plateau story
    strengthens decisively.
+---
 
+## EXP-068 / az-search — VECTORISED 4-PLY SEARCH at h=4 and h=10 — DONE 2026-08-08
+
+**Build.** `src/world/search/vec_tree.py`: wave-batched tree (32 paths/iteration under
+virtual loss; batched sim + batched policy + lockstep rollouts grouped by depth), same
+semantics as hybrid_tree plus a `max_depth` cap so search depth is independent of horizon.
+**15-20x faster**: 16k sims = 176 s at h=4 / 124 s at h=10, vs ~43 min sequential.
+BACK-CHECK at h=2 on EXP-066's expectimax table: 0.469 / 0.419 / 0.285 vs the sequential
+tree's 0.468 / 0.356 / 0.248 — same monotone curve, so vectorisation preserved semantics.
+
+**Adjudication (user directive 2026-08-08).** PRIMARY = STRONG-PLAY game value: fix the
+candidate root action, then BOTH sides play a deeper, bigger search (6-ply, 32k sims,
+value-greedy tail, root chance node integrating 64 execution outcomes); report the root's
+backed-up value. SECONDARY = champion-continuation playouts (deployment value, T=64 CRN).
+Regret = best-in-evaluated-set - chosen, on each table.
+
+**RESULTS (30 states per horizon, 4-ply arms, budgets 1k/4k/16k).**
+
+  h=4   PRIMARY (game value)        1k       4k      16k
+        vec_tree                  0.337 -> 0.213 -> 0.160    monotone, -53%
+        flat_width                0.266 -> 0.245 -> 0.237    nearly flat, -11%
+        ref (64k tree)                              0.077    (yardstick)
+        SECONDARY (deployment): tree 0.453/0.314/0.299 vs flat 0.337/0.293/0.259
+
+  h=10  PRIMARY (game value)        1k       4k      16k
+        vec_tree                  0.319 -> 0.293 -> 0.123    monotone, -61%
+        flat_width                0.156 -> 0.158 -> 0.132    flat, -16%
+        ref (64k tree)                              0.066    (yardstick)
+        SECONDARY (deployment): tree 0.628/0.531/0.280 vs flat 0.198/0.156/0.170
+
+**VERDICT — deep search is validated and it wins on game value.**
+1. SOUNDNESS: monotone regret decay at BOTH horizons (-53%, -61%), the steepest curves in
+   the whole search arc; the 64k tree reaches 0.077 / 0.066, i.e. near the evaluated-set
+   optimum. Depth-4 search converges properly at h=4 AND h=10.
+2. TREE > FLAT at 16k on the primary metric at both horizons (h=4: 0.160 vs 0.237,
+   ~1.4 SE; h=10: 0.123 vs 0.132, tie), and the CROSSOVER is visible: flat leads at 1k,
+   the tree overtakes by 16k. flat_width barely improves with budget (-11%, -16%) — more
+   width without depth buys almost nothing, the EXP-061 winner's-curse mechanism again.
+3. THE TWO ESTIMANDS DISAGREE, and that is the finding: under champion-continuation the
+   tree LOSES at every budget and even the 64k tree (0.232) is worse than flat (0.170).
+   Search plans against strong opposition; the deployed champion is a specific, weaker,
+   quirkier continuation. Best response != minimax (the EXP-065 lesson, restated at the
+   operator level).
+
+**CONSEQUENCE.** Search now has a certified value proposition (game value, >=16k sims) and
+a certified failure mode (deployment value vs a fixed imperfect opponent). Both matter:
+gates and the arena measure the SECOND. The natural next operator is therefore an
+OPPONENT-MODEL tree — inner decision nodes model the actual opponent (deployed selector)
+instead of free minimax — which should collect the tree's convergence properties AND the
+deployment estimand. Cost note: 16k sims/decision ~ 2-3 min even vectorised, so
+collection use needs either a smaller budget (~4k, where the tree is not yet ahead) or
+further batching across states.
 
 
 ## Template for a new entry
@@ -2233,6 +2285,43 @@ held-out: paired champion-continuation playouts T=64 (CRN)
   flat_width   B=1k: +0.3370±0.0565   B=4k: +0.2932±0.0595   B=16k: +0.2589±0.0617
   vec_tree     B=1k: +0.4531±0.0741   B=4k: +0.3135±0.0565   B=16k: +0.2990±0.0591
   ref(64k)     +0.1906±0.0412  (yardstick, not an arm)
+
+validation: AGGREGATE regret must fall with budget (within SEs);
+tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
+EXP-068 h=10 (4-ply): 90 arm rows
+
+-- REGRET under champion-continuation playouts T=64 CRN [secondary: deployment value] (30 states) --
+  flat_width   B=1k: +0.1979±0.0518   B=4k: +0.1557±0.0343   B=16k: +0.1698±0.0344
+  ref          B=64k: +0.2318±0.0405  (yardstick)
+  vec_tree     B=1k: +0.6276±0.0794   B=4k: +0.5307±0.0801   B=16k: +0.2797±0.0550
+
+validation: AGGREGATE regret must fall with budget (within SEs);
+tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
+EXP-068 h=4 (4-ply): 90 arm rows
+
+-- REGRET under STRONG-PLAY adjudication (forced root action, then 6-ply minimax search BOTH SIDES @ 32k sims + value-greedy tail) [PRIMARY] (30 states) --
+  flat_width   B=1k: +0.2663±0.0407   B=4k: +0.2452±0.0465   B=16k: +0.2365±0.0406
+  ref          B=64k: +0.0765±0.0218  (yardstick)
+  vec_tree     B=1k: +0.3371±0.0626   B=4k: +0.2126±0.0362   B=16k: +0.1601±0.0360
+
+-- REGRET under champion-continuation playouts T=64 CRN [secondary: deployment value] (30 states) --
+  flat_width   B=1k: +0.3370±0.0565   B=4k: +0.2932±0.0595   B=16k: +0.2589±0.0617
+  ref          B=64k: +0.1906±0.0412  (yardstick)
+  vec_tree     B=1k: +0.4531±0.0741   B=4k: +0.3135±0.0565   B=16k: +0.2990±0.0591
+
+validation: AGGREGATE regret must fall with budget (within SEs);
+tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
+EXP-068 h=10 (4-ply): 90 arm rows
+
+-- REGRET under STRONG-PLAY adjudication (forced root action, then 6-ply minimax search BOTH SIDES @ 32k sims + value-greedy tail) [PRIMARY] (30 states) --
+  flat_width   B=1k: +0.1564±0.0275   B=4k: +0.1576±0.0234   B=16k: +0.1315±0.0235
+  ref          B=64k: +0.0663±0.0197  (yardstick)
+  vec_tree     B=1k: +0.3194±0.0408   B=4k: +0.2930±0.0439   B=16k: +0.1232±0.0243
+
+-- REGRET under champion-continuation playouts T=64 CRN [secondary: deployment value] (30 states) --
+  flat_width   B=1k: +0.1979±0.0518   B=4k: +0.1557±0.0343   B=16k: +0.1698±0.0344
+  ref          B=64k: +0.2318±0.0405  (yardstick)
+  vec_tree     B=1k: +0.6276±0.0794   B=4k: +0.5307±0.0801   B=16k: +0.2797±0.0550
 
 validation: AGGREGATE regret must fall with budget (within SEs);
 tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
