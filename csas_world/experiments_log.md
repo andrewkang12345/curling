@@ -2354,3 +2354,31 @@ EXP-068 h=10 (4-ply): 90 arm rows
 
 validation: AGGREGATE regret must fall with budget (within SEs);
 tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
+
+**EXP-069 raw (auto):** az_v27_vectree vs az_v25_br k=4: winrate 0.5000, dScore -0.0568 ± 0.0403/end (n=2516)
+
+**VERDICT (2026-08-09): NOT PROMISING — the deployment/game-value gap is the binding
+constraint.** Clean chain (320 games, 3,200 records, **602 sig plies at 18.8%** — 2.2x the
+teaching density of any prior corpus; best @ epoch 12 with the guard active), yet the gate
+reads **−0.057 ± 0.040/end (t≈−1.4), winrate 0.500**. |ds| < 2·SE so no second draw fires;
+az_v25_br remains champion.
+
+**Reading (the pre-registered branch #2 fired).** More search, better targets by game
+value, 2x the significant plies — and the resulting policy is not better against the actual
+champion. This is now measured twice, independently: EXP-068 said this operator is superior
+on game value and inferior on deployment value; EXP-069 says training on it inherits the
+deployment-value deficit. The lever is NOT more search. Minimax-grounded targets teach the
+policy to defend against threats a specific opponent will not execute — the operator-level
+restatement of EXP-065 (best response beat minimax by +0.079/end).
+
+One honest caveat: the 1-in-3-rounds val split left only 2 val shards (80 records) — thin
+for checkpoint selection, though the guard and early-stop did engage (epoch 12 of 16), and
+the negative lean is too large to be a selection artifact alone.
+
+**CONSEQUENCE — the next operator is OPPONENT-MODEL search, not deeper/wider search.**
+Concretely: keep VecTree's certified machinery (chance nodes, PUCT allocation, monotone
+convergence) but replace free minimax at INNER decision nodes with the modelled deployed
+opponent (sample its selection; optionally mix minimax with a self-model at own nodes).
+That collects the tree's convergence properties AND the estimand the gates measure. This is
+the one search variant every result so far points at, and it is cheap: a selection-rule
+swap inside `_select` plus an opponent policy handle.
