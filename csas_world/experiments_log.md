@@ -1961,6 +1961,35 @@ instead of free minimax — which should collect the tree's convergence properti
 deployment estimand. Cost note: 16k sims/decision ~ 2-3 min even vectorised, so
 collection use needs either a smaller budget (~4k, where the tree is not yet ahead) or
 further batching across states.
+---
+
+## EXP-069 / az_v27 — CHAMPION TRAINING ON VECTORISED 4-PLY TREE TARGETS — IN FLIGHT 2026-08-09
+
+**Operator.** EXP-068's certified searcher as the collection teacher: `scorer=vectree` —
+VecTree, 4 plies, **16k simulator calls per decision**, terminal/rollout leaves (no value
+head inside the tree), distillation target = soft-topk over the tree's root Q, executed
+action = root argmax, significance gate = t>=2 on top-1 vs top-2 using the tree's OWN
+per-action standard errors (new `root_stats()`). Init/opponent-free self-play from
+az_v25_br (its policy export drives proposals, so the tree searches the champion's own
+candidate distribution). ~320 games x 10 decisions x 16k sims ~ 51M simulator calls — by
+far the most search-intensive corpus this project has built. Smoke: 25 min/game/worker,
+**sig rate 20%** (vs screen_tree's ~8.5% and StT's 5.2%) — the tree's low-SE root
+estimates pass the gate far more often, so teaching-signal density is ~2.4x the historical
+operator at equal game count. 16 workers => ~8 h collection.
+
+**PRE-REGISTERED PREDICTION + the tension being tested (written before the gate).**
+EXP-068 measured this operator as SUPERIOR on game value (regret 0.160/0.123 at 16k vs
+flat width's 0.237/0.132) and INFERIOR on deployment value against the champion (0.299/
+0.280 vs 0.259/0.170). The gate measures deployment value. So this run asks: do
+minimax-grounded targets teach transferable strength, or does the estimand gap dominate?
+- Certifies (pooled k=4 t>=2.1 over two draws, then k=8): search-based targets are the
+  first operator upgrade to beat the champion since az_v25_br; the reopened search program
+  pays off in training, not just in per-decision regret.
+- Parity/negative: the deployment-vs-game-value gap is the binding constraint, and the
+  next operator must be the OPPONENT-MODEL tree (inner nodes model the deployed selector
+  rather than free minimax) — i.e. the lever is opponent modelling, not more search.
+Either outcome is decisive for the roadmap. Gate protocol: shortened k=4 N=250 draw vs
+az_v25_br, second draw + pooled rule if promising, k=8 confirmation before promotion.
 
 
 ## Template for a new entry

@@ -163,6 +163,9 @@ class SearchCfg:
     mcts_max_depth: int = 0          # 0 = horizon-bound tree (default); 2 = the 2-ply training-time
                                      # operator (root expand → child eval via leaf fn, no grandchildren).
                                      # Use with use_mcts_tree=true + value_leaf_bootstrap=true.
+    # EXP-069 "vectree" scorer (vectorised 4-ply tree targets, EXP-068-certified):
+    vectree_budget: int = 16000     # simulator calls per decision
+    vectree_depth: int = 4          # search plies
     # EXP-063 "bigsel" scorer (big-budget self-distillation teacher, EXP-062 T2):
     bigsel_candidates: int = 192     # policy proposals (deployed-selection family)
     bigsel_k: int = 64               # noise realizations per candidate (CRN)

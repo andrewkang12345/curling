@@ -130,6 +130,67 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 lp = legal[:n_pol]
                 if legal.any() and lp.any():
                     diag.append((int(hh), float(q[legal].max() - q[:n_pol][lp].max())))
+        elif scorer == "vectree":
+            # EXP-069: distillation targets from the VECTORISED 4-ply tree (EXP-068's
+            # certified operator: monotone regret, beats flat width at >=16k on game
+            # value). Terminal/rollout leaves only — no value head inside the tree.
+            from csas.search import _sample_actions_batch
+            from .collect import _mc_rollout_terminal_batch
+            from .vec_tree import VecTree
+
+            def _sb(states, cond2, n):
+                cb = np.broadcast_to(np.asarray(cond2, np.float32), (len(states), 3)).astype(np.float32)
+                return np.asarray(_sample_actions_batch(policy, amean_t, astd_t,
+                                                        np.asarray(states, np.float32), cb, n,
+                                                        device, 1.1, 1.2, 0.0),
+                                  np.float32).reshape(len(states), n, 4)
+
+            def _rb(states, cond2, h2, persp2):
+                return _mc_rollout_terminal_batch(policy, amean_t, astd_t,
+                                                  np.asarray(states, np.float32),
+                                                  np.asarray(cond2, np.float32), int(h2), sie,
+                                                  int(persp2), device, rng, noise,
+                                                  cfg.rollout_temp, cfg.std_scale)
+
+            dense = np.asarray(generate_candidates(policy, amean_t, astd_t, st, cc, cfg, rng, device),
+                               np.float32)
+            n_pol = min(int(cfg.policy_candidates), len(dense))
+            rest = dense[n_pol:]
+            extra = rest[rng.choice(len(rest), size=min(32, len(rest)), replace=False)] if len(rest) else dense[:0]
+            pool = np.concatenate([dense[:n_pol], extra])[:128]
+            prior = np.concatenate([np.full(n_pol, 0.8 / n_pol),
+                                    np.full(len(pool) - n_pol, 0.2 / max(len(pool) - n_pol, 1))])
+            tree = VecTree(st, cc, hh, sie, pool, prior, sample_batch_fn=_sb, rollout_batch_fn=_rb,
+                           noise=noise, rng=rng,
+                           max_depth=int(getattr(cfg, "vectree_depth", 4)),
+                           wave=32, out_cap=8, inner_pool=8)
+            tree.run([int(getattr(cfg, "vectree_budget", 16000))])
+            acts, q, se, n_vis = tree.root_stats()
+            if len(acts) == 0:
+                return None
+            order = np.argsort(q)[::-1]
+            top_idx, weights = env_bridge.soft_topk(q, min(M, len(q)), cfg.policy_temperature)
+            conf = 1.0
+            sig_t = float(getattr(cfg, "dist_sig_t", 0.0) or 0.0)
+            if sig_t > 0.0 and len(q) >= 2:
+                a_i, b_i = int(order[0]), int(order[1])
+                den = float(np.sqrt(se[a_i] ** 2 + se[b_i] ** 2))
+                conf = 1.0 if (np.isfinite(den) and den > 0 and (q[a_i] - q[b_i]) / den >= sig_t) else 0.0
+            if diag is not None:
+                diag.append((int(hh), float(conf)))
+            dists.append((acts[top_idx].copy(), weights.copy(), conf))
+            a = np.asarray(acts[int(order[0])], np.float32)
+            if noise is not None:
+                a = noise.sample_batch(a[None], 1).reshape(4).astype(np.float32)
+            post, _ = env_bridge.apply_legality(st, env_bridge.simulate_one(st, cc, a)[None], hh, cc)
+            acts_exec.append(a.copy())
+            st = post[0]
+            cc = env_bridge.next_condition(cc, sie)
+            hh -= 1
+            states.append(st.copy())
+            conds.append(cc.copy())
+            persps.append(int(round(cc[2])))
+            continue
         elif scorer == "bigsel":
             # EXP-063: teacher = the deployed selection at big budget (EXP-062 T2):
             # pure policy proposals, k noisy executions each (CRN), value-head ranked.
@@ -444,7 +505,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=1)
     ap.add_argument("--shard-id", type=int, default=0)
-    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel"], default="tree",
+    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree"], default="tree",
                     help="tree = 2-ply KR-UCT with value-head leaves (az_v9); "
                          "terminal = value-free dense-candidate MC-to-terminal operator (az_v10); "
                          "tree_terminal = dense-root KR-UCT to mcts_max_depth + terminal-rollout leaves (az_v11); "
@@ -508,7 +569,7 @@ def main():
         print(f"[selfplay] BR mode: fixed opponent = {args.opponent_world} (deployed 48x8)", flush=True)
 
     recs: List[Dict[str, np.ndarray]] = []
-    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel") else None
+    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree") else None
     n_games = 0
     for i, root in enumerate(roots):
         g = play_game(root, policy, amean_t, astd_t, amean_np, astd_np,

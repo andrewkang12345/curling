@@ -52,7 +52,7 @@ class _Budget:
 class _Dec:
     """Decision node (a team is about to throw)."""
     __slots__ = ("x", "c", "h", "depth", "pool", "prior", "n_open",
-                 "edge_n", "edge_sum", "edge_vl", "chance")
+                 "edge_n", "edge_sum", "edge_sq", "edge_vl", "chance")
 
     def __init__(self, x, c, h, depth):
         self.x, self.c, self.h, self.depth = x, c, int(h), int(depth)
@@ -61,6 +61,7 @@ class _Dec:
         self.n_open = 0
         self.edge_n = None
         self.edge_sum = None
+        self.edge_sq = None
         self.edge_vl = None
         self.chance: Dict[int, "_Chance"] = {}
 
@@ -70,6 +71,7 @@ class _Dec:
         m = len(self.pool)
         self.edge_n = np.zeros(m, np.float64)
         self.edge_sum = np.zeros(m, np.float64)
+        self.edge_sq = np.zeros(m, np.float64)
         self.edge_vl = np.zeros(m, np.float64)
         self.n_open = 1           # open the top-prior action immediately
 
@@ -160,6 +162,7 @@ class VecTree:
             node.edge_vl[i] -= 1.0
             node.edge_n[i] += 1.0
             node.edge_sum[i] += v
+            node.edge_sq[i] += v * v
             if j is None:                              # expansion: newest outcome
                 ch.out_n[-1] += 1.0
             else:
@@ -242,6 +245,17 @@ class VecTree:
         s = self.root.edge_sum[: self.root.n_open]
         tot = float(n.sum())
         return float(s.sum() / tot) if tot > 0 else 0.0
+
+    def root_stats(self):
+        """(actions, Q, SE, n) over root actions with evidence — for distillation
+        targets and the collect-time significance gate."""
+        k = self.root.n_open
+        n = self.root.edge_n[:k]
+        keep = n > 0
+        q = np.where(keep, self.root.edge_sum[:k] / np.maximum(n, 1), 0.0)
+        var = np.maximum(np.where(keep, self.root.edge_sq[:k] / np.maximum(n, 1) - q ** 2, 0.0), 0.0)
+        se = np.where(n > 1, np.sqrt(var / np.maximum(n, 1)), np.inf)
+        return self.root.pool[:k][keep], q[keep], se[keep], n[keep]
 
     def best_action(self) -> np.ndarray:
         k = self.root.n_open
