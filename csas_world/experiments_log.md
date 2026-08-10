@@ -1990,6 +1990,46 @@ minimax-grounded targets teach transferable strength, or does the estimand gap d
   rather than free minimax) — i.e. the lever is opponent modelling, not more search.
 Either outcome is decisive for the roadmap. Gate protocol: shortened k=4 N=250 draw vs
 az_v25_br, second draw + pooled rule if promising, k=8 confirmation before promotion.
+---
+
+## EXP-070 / population META-GAME — maximin, meta-Nash, intransitivity — DONE 2026-08-10
+
+**Why.** Our promotion rule (head-to-head dScore vs the incumbent) rewards EXPLOITATION and
+cannot see ROBUSTNESS: a Nash-approaching policy reads as "parity" against everyone. Two
+open questions rode on this — (a) was EXP-069's az_v27 (minimax/game-value targets) worse,
+or merely less exploiting? (b) can a head-to-head ratchet cycle here? Full cross-play over
+6 models, 15 pairs, k=4, ~2,316 ends/cell.
+
+**RESULT 1 — az_v27 is NOT secretly robust; the head-to-head verdict stands.** v27 loses to
+EVERY population member (-0.038 to -0.113) and has the WORST maximin (-0.113) and worst
+mean (-0.072). The "it's Nash-like, we just measured it wrong" hypothesis is dead: 4-ply
+minimax targets produced a policy that is both worse head-to-head AND less robust. Search
+targets do not merely fail to exploit — they fail, period. (EXP-069's negative gate was the
+right read, and this closes the last defence of the search-as-teacher program.)
+
+**RESULT 2 — THE POPULATION IS INTRANSITIVE.** Four 3-cycles, e.g. **v14d > v19 > v26 >
+v14d** and v19 > v26 > v25 > v19 (weakest edges +0.011..+0.014, i.e. ~0.5 SE — weak but
+consistent). EXP-042's transitivity verdict was population-limited exactly as the user
+suspected; the BR-generated models (v25, v26) are what introduced the cycles. Consequence:
+**head-to-head promotion CAN cycle, and our ratchet has no convergence guarantee.**
+
+**RESULT 3 — the meta-Nash champion is a MIXTURE, and it is not our champion.**
+Fictitious play gives **v26 65.2% / v19 20.3% / v14d 14.5%**, equilibrium value 0.0000.
+az_v25_br — the deployed champion — is NOT in the support (it loses to v26 by -0.037).
+The current best SINGLE robust model by maximin is v26 (-0.014), then v14d (-0.021), then
+v25 (-0.037).
+
+**DECISIONS.**
+1. Standing promotion rule CHANGED: certify by MAXIMIN over the population (robustness /
+   near-unexploitability) with head-to-head as secondary. Head-to-head alone selects
+   exploiters and can cycle — measured, not theoretical.
+2. Champion: az_v25_br is NOT demoted on this evidence alone (0.5-SE cycle edges, N=150/cell
+   is a screening resolution, and v25 still has the best MEAN +0.035). Queued: a
+   full-N re-measurement of the three cycle-critical cells (v25-v26, v19-v26, v14d-v19)
+   before any change of champion.
+3. The loop becomes PSRO: collect against the meta-Nash MIXTURE (opponent sampled per game
+   from the 65/20/15 weights), not against a single incumbent; progress metric =
+   exploitability of the mixture, not head-to-head.
 
 
 ## Template for a new entry
@@ -2382,3 +2422,37 @@ opponent (sample its selection; optionally mix minimax with a self-model at own 
 That collects the tree's convergence properties AND the estimand the gates measure. This is
 the one search variant every result so far points at, and it is cheap: a selection-rule
 swap inside `_select` plus an opponent policy handle.
+EXP-070 population meta-game (6 models, 15 measured pairs, k=4, ~2316 ends/cell)
+
+dScore matrix (row perspective, +row wins):
+               v14d      v19      v21      v25      v26      v27
+  v14d          —     +0.063   -0.011   -0.021   -0.020   +0.091
+  v19        -0.063      —     +0.069   -0.063   +0.014   +0.041
+  v21        +0.011   -0.069      —     -0.017   +0.001   +0.038
+  v25        +0.021   +0.063   +0.017      —     -0.037   +0.113
+  v26        +0.020   -0.014   -0.001   +0.037      —     +0.078
+  v27        -0.091   -0.041   -0.038   -0.113   -0.078      —  
+
+ROBUSTNESS (what the head-to-head rule cannot see):
+  model      maximin      mean   worst vs
+  v26         -0.014    +0.024        v19
+  v14d        -0.021    +0.020        v25
+  v25         -0.037    +0.035        v26
+  v19         -0.063    -0.000        v25
+  v21         -0.069    -0.007        v19
+  v27         -0.113    -0.072        v25
+  (maximin = worst-case dScore over the population: higher floor = less exploitable)
+
+META-NASH mixture (fictitious play, 20k iters):
+  v26       65.2%   (its dScore vs the mixture: +0.000)
+  v19       20.3%   (its dScore vs the mixture: +0.000)
+  v14d      14.5%   (its dScore vs the mixture: -0.001)
+  equilibrium value +0.0000 (0 = balanced, as a symmetric zero-sum game should be)
+  exploitability of each model vs the mixture = -(its score vs mixture) when negative
+
+INTRANSITIVITY (3-cycles in the sign pattern):
+  v14d > v19 > v26 > v14d   (weakest edge +0.014)
+  v19 > v26 > v25 > v19   (weakest edge +0.014)
+  v14d > v19 > v21 > v14d   (weakest edge +0.011)
+  v21 > v26 > v25 > v21   (weakest edge +0.001)
+  => head-to-head promotion CAN cycle; PSRO/mixture-BR is the correct loop
