@@ -2030,7 +2030,51 @@ v25 (-0.037).
 3. The loop becomes PSRO: collect against the meta-Nash MIXTURE (opponent sampled per game
    from the 65/20/15 weights), not against a single incumbent; progress metric =
    exploitability of the mixture, not head-to-head.
+---
 
+## EXP-071 / TAIL ABLATION — why did the vectree champion fail? — DONE 2026-08-10
+
+**Question (user).** EXP-069's failure: bad leaf continuation (raw-policy tail) or not
+enough search in the 4 plies? Four arms differing ONLY in depth-cap leaf evaluation, same
+16k budget, same 30 h=10 states; flat_width + ref(64k) carried over from EXP-068.
+
+  GAME VALUE (primary)      1k       4k      16k        DEPLOYMENT VALUE   1k     4k    16k
+  tail_raw   (EXP-069's)  0.166 -> 0.192 -> 0.197       tail_raw        0.380 0.346 0.311
+  tail_vgreedy            0.084 -> 0.156 -> 0.219       tail_vgreedy    0.397 0.477 0.523
+  tail_vleaf  (V leaf)    0.118 -> 0.180 -> 0.178       tail_vleaf      0.410 0.260 0.160
+  tail_vleaf_d6 (6-ply)   0.118 -> 0.171 -> 0.171       tail_vleaf_d6   0.410 0.246 0.181
+  flat_width              0.164 -> 0.146 -> 0.139       flat_width      0.056 0.130 0.118
+  ref(64k, raw tail)                      0.063         ref(64k)                    0.195
+
+**ANSWER: NEITHER — and something worse.** (1) Tail quality is NOT the explanation on game
+value: swapping the raw tail for value-greedy or a value leaf does not improve 16k regret
+(0.197 / 0.219 / 0.178 / 0.171 — all within ~1 SE of each other, all WORSE than
+flat_width's 0.139). (2) Depth is not it either: freeing the tail budget and searching
+6 plies instead of 4 changes nothing (0.178 -> 0.171). (3) **The disturbing result: EVERY
+tree arm's game-value regret INCREASES from 1k to 16k** (raw 0.166->0.197, vgreedy
+0.084->0.219, vleaf 0.118->0.178). More search makes the 30-state tree WORSE by the very
+metric search optimises — the opposite of EXP-068's h=10 curve (0.319->0.123) on the SAME
+states and budgets.
+
+**The contradiction is the finding, and it localises the bug.** EXP-068's vec_tree arm and
+EXP-071's tail_raw arm are the same operator on the same states; they differ only in the
+RNG stream (seed*31 vs seed*41) and in EXP-068 having run the arms in a different order.
+Two candidate explanations, both testable: (a) per-state variance across seeds is far
+larger than the aggregate SEs suggest (i.e. the 30-state panel cannot resolve these arms
+at all, and EXP-068's monotone curve was partly luck); (b) a genuine seed/order-dependent
+defect in VecTree (e.g. root_out_cap=8 means the ROOT action values integrate over only 8
+noise draws no matter the budget — extra sims deepen subtrees while the root estimate
+stays noisy, so bigger budgets can drift AWAY from the best action).
+**(b) is concrete and likely: the adjudicator was given root_out_cap=64 for exactly this
+reason; the ARMS were left at 8.** Under-integrated root expectations is a real bug for a
+stochastic-action game, and it would explain both the non-monotonicity here and why the
+targets EXP-069 trained on were poor.
+
+**NEXT (pre-registered).** Rerun the h=10 arms with root_out_cap in {8, 32, 64} x seeds
+{a,b} on the same 30 states: if regret becomes monotone at cap>=32 and seed-variance
+collapses, the operator (and EXP-069's corpus) was root-under-integrated, and the whole
+search-as-teacher line deserves a rerun with the fix. Until then EXP-068's positive h=4/h=10
+tree curves are DOWNGRADED to provisional — they may not replicate.
 
 ## Template for a new entry
 

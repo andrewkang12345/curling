@@ -43,7 +43,7 @@ from world.config import Config, load_config
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--phase", required=True,
-                choices=["states", "search", "adjudicate", "adj_strong", "aggregate", "validate_h2"])
+                choices=["states", "search", "tails", "adjudicate", "adj_strong", "aggregate", "validate_h2"])
 ap.add_argument("--horizon", type=int, default=4)
 ap.add_argument("--config", default="configs/exp_037_sig_screen_tree.yaml")
 ap.add_argument("--policy", default="checkpoints/csas_world/az_v15_L8/incumbent0_policy_csas.pt")
@@ -61,6 +61,7 @@ ap.add_argument("--shard-id", type=int, default=0)
 ap.add_argument("--adj-budget", type=int, default=32000, help="adj_strong: sims per forced-action search")
 ap.add_argument("--adj-depth", type=int, default=6, help="adj_strong: search depth (both sides)")
 ap.add_argument("--adj-nsearch", type=int, default=4, help="adj_strong: value-greedy tail strength")
+ap.add_argument("--adj-only-budget", type=int, default=0, help="adjudicate only choices at this budget")
 ap.add_argument("--seed", type=int, default=68)
 args = ap.parse_args()
 
@@ -298,6 +299,62 @@ if args.phase == "search":
     sys.exit(0)
 
 
+# ------------------------------------------------------------------ tails      #
+if args.phase == "tails":
+    """EXP-071: TAIL ABLATION at fixed budget. EXP-068's deployment-value gap was
+    negligible with NO tail (h=4: 0.040 +- 0.086) and large with one (h=10: 0.110 +-
+    0.065), so the raw-policy leaf continuation is the leading suspect for EXP-069's
+    failure. Arms differ ONLY in depth-cap leaf evaluation."""
+    def leaf_raw(states, cond, h, persp):
+        rng = np.random.default_rng(int(args.seed) + 13)
+        return _mc_rollout_terminal_batch(policy, amean_t, astd_t, np.asarray(states, np.float32),
+                                          np.asarray(cond, np.float32), int(h), SIE, int(persp),
+                                          device, rng, NZ, cfg.rollout_temp, cfg.std_scale)
+
+    def leaf_vgreedy(states, cond, h, persp):
+        rng = np.random.default_rng(int(args.seed) + 17)
+        return _mc_rollout_terminal_batch(policy, amean_t, astd_t, np.asarray(states, np.float32),
+                                          np.asarray(cond, np.float32), int(h), SIE, int(persp),
+                                          device, rng, NZ, cfg.rollout_temp, cfg.std_scale,
+                                          value_model=VMODEL, n_search=4)
+
+    def leaf_value(states, cond, h, persp):
+        v = np.asarray(env_bridge.evaluate_value(VMODEL, np.asarray(states, np.float32),
+                                                 np.asarray(cond, np.float32), device), np.float64)
+        return v if int(round(np.asarray(cond)[2])) == int(persp) else -v
+
+    TAIL_ARMS = {
+        "tail_raw":      dict(fn=leaf_raw,     mult=1, depth=4),
+        "tail_vgreedy":  dict(fn=leaf_vgreedy, mult=4, depth=4),
+        "tail_vleaf":    dict(fn=leaf_value,   mult=0, depth=4),
+        "tail_vleaf_d6": dict(fn=leaf_value,   mult=0, depth=6),
+    }
+    out_path = OUT / f"search_shard{args.shard_id}.jsonl"
+    done = set()
+    if out_path.exists():
+        done = {(json.loads(l)["sid"], json.loads(l)["arm"])
+                for l in out_path.read_text().splitlines() if l.strip()}
+    jobs = [(sid, arm) for sid in range(len(SX)) for arm in TAIL_ARMS]
+    for j, (sid, arm) in enumerate(jobs):
+        if j % args.num_shards != args.shard_id or (sid, arm) in done:
+            continue
+        kw = TAIL_ARMS[arm]
+        x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
+        prior = np.concatenate([np.full(POOL_POLICY, 0.8 / POOL_POLICY),
+                                np.full(len(pool) - POOL_POLICY, 0.2 / max(len(pool) - POOL_POLICY, 1))])
+        tree = VecTree(x, c, args.horizon, SIE, pool, prior, sample_batch_fn=sample_batch_fn,
+                       rollout_batch_fn=kw["fn"], noise=NZ,
+                       rng=np.random.default_rng(args.seed * 41 + sid),
+                       max_depth=kw["depth"], wave=args.wave, rollout_mult=kw["mult"])
+        picks = tree.run(BUDGETS)
+        chosen = {str(B): nearest_idx(pool, a) for B, a in picks.items()}
+        with out_path.open("a") as fh:
+            fh.write(json.dumps({"sid": sid, "arm": arm, "chosen_idx": chosen}) + "\n")
+        print(f"[tails] h{args.horizon} sid {sid} {arm} done ({tree.budget.sims} sims)", flush=True)
+    print("EXP071_TAILS_SHARD_DONE", flush=True)
+    sys.exit(0)
+
+
 # ------------------------------------------------------------------ adj_strong #
 if args.phase == "adj_strong":
     """User-specified adjudicator (2026-08-08): the value of a candidate action is its
@@ -321,7 +378,9 @@ if args.phase == "adj_strong":
         if sid % args.num_shards != args.shard_id or sid in done:
             continue
         x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
-        idxs = sorted({int(v) for r in rows if r["sid"] == sid for v in r["chosen_idx"].values()})
+        idxs = sorted({int(v) for r in rows if r["sid"] == sid
+                       for kb, v in r["chosen_idx"].items()
+                       if not args.adj_only_budget or int(kb) in (args.adj_only_budget, args.ref_budget)})
         if not idxs:
             continue
         held = {}
@@ -371,7 +430,9 @@ if args.phase == "adjudicate":
         if sid % args.num_shards != args.shard_id or sid in done:
             continue
         x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)
-        idxs = sorted({int(v) for r in rows if r["sid"] == sid for v in r["chosen_idx"].values()})
+        idxs = sorted({int(v) for r in rows if r["sid"] == sid
+                       for kb, v in r["chosen_idx"].items()
+                       if not args.adj_only_budget or int(kb) in (args.adj_only_budget, args.ref_budget)})
         if not idxs:
             continue
         held = {}
