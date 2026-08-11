@@ -2075,6 +2075,41 @@ targets EXP-069 trained on were poor.
 collapses, the operator (and EXP-069's corpus) was root-under-integrated, and the whole
 search-as-teacher line deserves a rerun with the fix. Until then EXP-068's positive h=4/h=10
 tree curves are DOWNGRADED to provisional — they may not replicate.
+---
+
+## STANDING METHODOLOGY — operator hygiene (adopted 2026-08-11 after the EXP-071 bug)
+
+The EXP-071 defect was not a missing feature; it was a PROCESS failure with a clear
+signature, so the fixes are process rules, not just code:
+
+**What happened.** The strong-play ADJUDICATOR was deliberately given `root_out_cap=64`
+("the root expectation is the quantity being reported"), while the ARMS — the operators
+being measured, and the one that generated EXP-069's entire training corpus — were left at
+the interior default of 8. Extra budget therefore deepened subtrees around a root estimate
+that never became more accurate. Cost: EXP-069 (~1 day of GPU) trained a champion on
+targets from an operator whose regret INCREASES with budget, and EXP-068's positive curves
+became provisional.
+
+**RULE 1 — config parity audit.** Any parameter that differs between an arm and its
+yardstick must be named and justified in the pre-registration. If a setting is better for
+the measuring instrument, ask why it is not better for the thing being measured.
+
+**RULE 2 — operator convergence gate BEFORE any training use.** No operator may generate
+training targets until it has passed a cheap monotonicity check: regret (or a proxy)
+decreasing across >=3 budgets on >=20 states with >=2 seeds. EXP-071 was effectively this
+test run AFTER the training; run 30 minutes of it FIRST. This would have caught the bug
+before EXP-069.
+
+**RULE 3 — two seeds for every operator claim.** We already required replication for
+TRAINING results (EXP-053/056 taught us t~1.7 does not replicate); operator measurements
+were exempt for no good reason, and EXP-068 vs EXP-071 differ by nothing but the RNG
+stream. Every operator curve gets >=2 seeds or it is provisional.
+
+**RULE 4 — estimator accuracy must scale with budget.** In a stochastic-action game any
+quantity that is an EXPECTATION over execution noise (root action values above all) must
+integrate more samples as the budget grows. A fixed cap on that integration is a bug even
+when it looks like a memory/pruning knob. `VecTree` now warns at `root_out_cap < 32`.
+
 
 ## Template for a new entry
 
@@ -2500,3 +2535,23 @@ INTRANSITIVITY (3-cycles in the sign pattern):
   v14d > v19 > v21 > v14d   (weakest edge +0.011)
   v21 > v26 > v25 > v21   (weakest edge +0.001)
   => head-to-head promotion CAN cycle; PSRO/mixture-BR is the correct loop
+EXP-068 h=10 (4-ply): 180 arm rows
+
+-- REGRET under STRONG-PLAY adjudication (forced root action, then 6-ply minimax search BOTH SIDES @ 32k sims + value-greedy tail) [PRIMARY] (30 states) --
+  flat_width   B=1k: +0.1637±0.0290   B=4k: +0.1457±0.0255   B=16k: +0.1388±0.0213
+  ref          B=64k: +0.0631±0.0163  (yardstick)
+  tail_raw     B=1k: +0.1664±0.0403   B=4k: +0.1916±0.0404   B=16k: +0.1974±0.0334
+  tail_vgreedy B=1k: +0.0842±0.0512   B=4k: +0.1563±0.0403   B=16k: +0.2185±0.0325
+  tail_vleaf   B=1k: +0.1177±0.0377   B=4k: +0.1801±0.0301   B=16k: +0.1777±0.0262
+  tail_vleaf_d6 B=1k: +0.1177±0.0377   B=4k: +0.1710±0.0312   B=16k: +0.1705±0.0267
+
+-- REGRET under champion-continuation playouts T=64 CRN [secondary: deployment value] (30 states) --
+  flat_width   B=1k: +0.0666±0.0218   B=4k: +0.1354±0.0362   B=16k: +0.1229±0.0293
+  ref          B=64k: +0.1974±0.0474  (yardstick)
+  tail_raw     B=1k: +0.3802±0.0973   B=4k: +0.3463±0.1068   B=16k: +0.3010±0.0720
+  tail_vgreedy B=1k: +0.3969±0.2464   B=4k: +0.4766±0.1004   B=16k: +0.5068±0.0792
+  tail_vleaf   B=1k: +0.4096±0.1025   B=4k: +0.2597±0.0679   B=16k: +0.1552±0.0408
+  tail_vleaf_d6 B=1k: +0.4096±0.1025   B=4k: +0.2463±0.0690   B=16k: +0.1760±0.0431
+
+validation: AGGREGATE regret must fall with budget (within SEs);
+tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
