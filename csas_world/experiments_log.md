@@ -2109,6 +2109,46 @@ stream. Every operator curve gets >=2 seeds or it is provisional.
 quantity that is an EXPECTATION over execution noise (root action values above all) must
 integrate more samples as the budget grows. A fixed cap on that integration is a bug even
 when it looks like a memory/pruning knob. `VecTree` now warns at `root_out_cap < 32`.
+---
+
+## EXP-072 / ROOT-INTEGRATION SWEEP — the hypothesis is REFUTED; the operator is unstable — DONE 2026-08-11
+
+One variable (`root_out_cap` in {8,32,64,256}) x 2 seeds x 30 h=10 states, everything else
+identical to EXP-069's collection config. Strong-play (game-value) regret:
+
+  arm         1k      4k     16k        arm         1k      4k     16k
+  cap8_sa   0.295 -> 0.235 -> 0.226     cap8_sb   0.257 -> 0.223 -> 0.254
+  cap32_sa  0.165 -> 0.177 -> 0.218     cap32_sb  0.220 -> 0.256 -> 0.224
+  cap64_sa  0.198 -> 0.178 -> 0.164     cap64_sb  0.187 -> 0.246 -> 0.274
+  cap256_sa 0.216 -> 0.121 -> 0.225     cap256_sb 0.309 -> 0.210 -> 0.201
+  flat_width 0.211 -> 0.206 -> 0.182    ref(64k)              0.103
+
+**RESULT 1 — root under-integration was NOT the cause.** Raising the cap 8 -> 256 does not
+make regret monotone and does not clearly lower it; no cap beats flat_width at 16k. The
+EXP-071 diagnosis was wrong.
+
+**RESULT 2 — the real problem is OPERATOR INSTABILITY, and it is severe.** Two seeds of the
+IDENTICAL configuration pick the same 16k action on only **10-23% of states** (cap8 17%,
+cap32 23%, cap64 10%, cap256 17%), and their regret curves disagree in shape (cap64:
+0.198->0.164 vs 0.187->0.274 — one monotone down, one monotone up). Agreement with the 64k
+reference choice is 5-12/30 everywhere. So the tree is essentially resampling from a broad
+set of near-equivalued actions rather than converging on one — which also explains
+EXP-068 vs EXP-071 (same code, different RNG stream, opposite curves): **both were draws
+from a high-variance operator, and neither curve was real.**
+
+**CONSEQUENCES.**
+1. EXP-068's positive tree curves are RETRACTED (not merely provisional): the h=4/h=10
+   "monotone regret, beats flat width" result does not survive seed replication. EXP-066's
+   h=2 result stands (it was 30 states x 1 seed, but the h=2 expectimax reference is exact
+   and the sequential + vectorised implementations agreed).
+2. EXP-069's failure is EXPLAINED without any estimand story: it distilled targets from an
+   operator whose action choice is ~80-90% seed noise at the budgets used.
+3. The plateau finding (EXP-060: deployed selection self-disagrees ~99% of the time) now
+   has a search-side twin — near-equivalued action sets defeat convergence for TREES too,
+   not just for flat selection. This is the same underlying property of the game.
+4. Any future search work must FIRST clear the RULE-2/RULE-3 gate (>=2 seeds, monotone
+   across budgets) on a per-STATE basis, not just in aggregate. Aggregate means hid a
+   choice-agreement rate of 10-23%.
 
 
 ## Template for a new entry
@@ -2555,3 +2595,4 @@ EXP-068 h=10 (4-ply): 180 arm rows
 
 validation: AGGREGATE regret must fall with budget (within SEs);
 tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
+incomplete: 300 search rows, 0 adjudicated states

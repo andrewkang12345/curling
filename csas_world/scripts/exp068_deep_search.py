@@ -84,8 +84,8 @@ def aggregate():
         for l in f.read_text().splitlines():
             r = json.loads(l)
             adjs[r["sid"]] = r
-    if not rows or not adj:
-        print(f"incomplete: {len(rows)} search rows, {len(adj)} adjudicated states")
+    if not rows or not (adj or adjs):   # either table suffices
+        print(f"incomplete: {len(rows)} search rows, {len(adj)} deployment / {len(adjs)} strong states")
         return
     print(f"EXP-068 h={args.horizon} ({args.max_depth}-ply): {len(rows)} arm rows")
 
