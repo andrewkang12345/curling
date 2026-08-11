@@ -100,12 +100,12 @@ def simulate_batched(states_norm: np.ndarray, conds: np.ndarray, actions: np.nda
     actions = np.asarray(actions, dtype=np.float32).reshape(-1, 4)
     B = states.shape[0]
     raw = states.reshape(B, NUM_STONES, 2) * 4095.0
-    live_counts = np.array([int(((r[:, 0] > 0) | (r[:, 1] > 0)).sum() -
-                                int(np.sum((r[:, 0] >= 4095.0) & (r[:, 1] >= 4095.0))))
-                            for r in raw])
-    # robust live count via the canonical helper
-    from csas.common import in_play_raw
-    live_counts = np.array([int(in_play_raw(r).sum()) for r in raw], dtype=np.int64)
+    # Vectorised live count — identical predicate to csas.common.in_play_raw, but the
+    # per-row Python call was O(B) overhead that capped this function at ~9k sims/s
+    # (vs ~29k for the single-state path) and dominated big-batch reference work.
+    from csas.common import POS_MAX
+    _x, _y = raw[:, :, 0], raw[:, :, 1]
+    live_counts = (((_x > 0) | (_y > 0)) & (_x < POS_MAX) & (_y < POS_MAX)).sum(axis=1).astype(np.int64)
     out = np.zeros((B, STATE_DIM), dtype=np.float32)
     for n_prev in np.unique(live_counts):
         idx = np.where(live_counts == n_prev)[0]
