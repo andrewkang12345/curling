@@ -2596,3 +2596,81 @@ EXP-068 h=10 (4-ply): 180 arm rows
 validation: AGGREGATE regret must fall with budget (within SEs);
 tree beating flat_width at 16k reproduces the EXP-066 finding at depth.
 incomplete: 300 search rows, 0 adjudicated states
+
+## EXP-073 — h=4 finite-game reference and root-confirmation test (2026-08-12)
+
+**Question.** Does search beyond h=2 improve with more simulations when it is judged
+against a recursively constructed finite-game reference rather than another stochastic
+MCTS tree? Does spending 25% of the same total budget on a fresh paired-CRN tournament
+over the tree's top eight root actions make the final choice more reliable?
+
+**Design.** Twenty-four h=4 states, each with one shared pool of 24 root actions. Each
+root action's reference value is constructed by fixed-CRN recursion:
+
+`mean(K1=12 root executions) -> min(10 opponent replies) -> mean(K2=3 reply executions)
+-> validated high-precision h=2 expectimax (10x6 own, 8x4 opponent)`.
+
+The resulting table is deterministic conditional on its CRN seed. `vt_plain` takes the
+VecTree root argmax. `vt_confirm` spends 75% of each nominal budget on that same tree and
+25% on a fresh paired-CRN, value-greedy tournament among its top eight actions. Both arms
+use two independent search seeds at 1k/4k/16k/64k nominal total budget. Regret is the best
+value in reference table A minus the value of the action selected by the arm.
+
+**Reference stability gate.** A full independent CRN derivation (table B, all 24 states)
+gave Spearman rho **0.746**, top-1 agreement **38%**, mean absolute action-value difference
+**0.183/end**, and regret of B's pick under A **0.155/end** (reverse direction 0.178/end;
+symmetric mean 0.166/end). Thus the raised-fidelity reference is materially better than
+the first pass (0.261/end floor), but it is still not exact: its action-ranking sensitivity
+is about as large as the residual regret at 64k. Absolute convergence below this scale is
+not resolvable. Arm-vs-arm comparisons are more informative because both arms are scored
+on the same table A.
+
+**Complete result (96/96 unique arm rows):**
+
+| arm / search seed | 1k | 4k | 16k | 64k |
+|---|---:|---:|---:|---:|
+| `vt_plain` a | 0.4084 +/- 0.0549 | 0.2712 +/- 0.0525 | 0.2035 +/- 0.0407 | 0.1731 +/- 0.0395 |
+| `vt_plain` b | 0.4365 +/- 0.0642 | 0.2537 +/- 0.0507 | 0.2286 +/- 0.0464 | 0.1516 +/- 0.0351 |
+| `vt_confirm` a | 0.5672 +/- 0.0595 | 0.3233 +/- 0.0611 | 0.2601 +/- 0.0493 | 0.2227 +/- 0.0420 |
+| `vt_confirm` b | 0.5763 +/- 0.0694 | 0.3796 +/- 0.0580 | 0.2458 +/- 0.0411 | 0.1408 +/- 0.0331 |
+
+Values are mean reference regret in points/end; displayed `+/-` is the aggregate script's
+standard error. Seed-pooled means for `vt_plain` are **0.4224, 0.2624, 0.2161, 0.1623**.
+The paired 1k-to-64k improvement is +0.235/end for seed a (p=0.0013) and +0.285/end for
+seed b (p=0.00056). Mean regret decreases at every budget step in both seeds, while only
+46% and 50% of individual states are monotone at every step. Therefore the supported claim
+is aggregate convergence toward this finite reference, not per-state monotonicity.
+
+For the pre-registered arm comparison, average the two seeds within each state to keep the
+state (n=24), not the duplicated seed observation, as the sampling unit:
+
+| budget | confirm | plain | paired delta (confirm - plain), 95% CI | paired p |
+|---|---:|---:|---:|---:|
+| 1k | 0.5717 | 0.4224 | +0.1493 +/- 0.1191 | 0.022 |
+| 4k | 0.3515 | 0.2624 | +0.0890 +/- 0.1021 | 0.101 |
+| 16k | 0.2530 | 0.2161 | +0.0369 +/- 0.0729 | 0.331 |
+| 64k | 0.1817 | 0.1623 | +0.0194 +/- 0.0504 | 0.459 |
+
+At 64k, across-seed selected-action value SD is 0.0515/end for `vt_confirm` versus
+0.0214/end for `vt_plain`. The confirmation arm is significantly worse at 1k and has no
+detectable benefit at 4k-64k. Reject this **specific** 25%-budget, top-eight, value-greedy
+confirmation design; this does not rule out every possible confirmation method.
+
+**Verdict.** EXP-073 gives replicated evidence that, at **h=4**, allocating more VecTree
+simulations improves the selected action relative to a fixed finite-game reference. This
+repairs the earlier claim that h>2 trees showed no usable convergence. It does **not** prove
+exact convergence (the 64k residual is at the reference's ~0.16/end sensitivity floor),
+does not test h=10, and does not establish deployed win-rate improvement or superiority to
+flat-width search. The defensible next claim is "aggregate h=4 search quality improves with
+budget under the finite reference," not simply "h>2 search works."
+
+**Operational correction.** The first 12-worker search launch placed all six confirmation
+shards three-per-GPU on only GPUs 2 and 3. Their unchunked value-greedy policy inference
+OOMed, while `wait ... || true` let the chain print a misleading done marker and append a
+48/96-row partial aggregate. The partial aggregate has been removed from this log. The
+policy-candidate inference is now chunked with `POLICY_BATCH_CAP`, every worker failure is
+fatal to the chain, and aggregation exits nonzero unless all expected `(state, arm, seed)`
+rows exist. The six failed shards were resumed one-per-GPU in two waves. Also fixed
+`--n-states` to limit a reference pass even when its `states.npz` was copied from a larger
+run; the reproducible chain explicitly requests all 24 stability states. The repaired run
+passed the 96-key completeness gate and finished at 2026-08-12 20:30:49 UTC.

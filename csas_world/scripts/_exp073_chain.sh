@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 cd /mnt/data/curling2/csas_world
 OUT=eval_out/exp073_h4; OUT2=eval_out/exp073_h4_seedB
 LOG="$OUT/chain.log"; mkdir -p "$OUT" "$OUT2"
 say() { echo "[exp073] $* $(date -u +%H:%M)" | tee -a "$LOG"; }
 run() { env -u LD_LIBRARY_PATH "$@"; }
+wait_all() {
+  local failed=0 pid
+  for pid in "$@"; do
+    wait "$pid" || failed=1
+  done
+  return "$failed"
+}
 export WORLD_BOUNDARY_REMOVAL=1 PYTHONUNBUFFERED=1
 source scripts/setup_gpu.sh
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.11 VALUE_EVAL_BATCH=128 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -20,17 +27,17 @@ pids=(); for k in $(seq 0 7); do
     --shard-id $k --num-shards 8 --out-dir "$OUT" >> "$OUT/ref_shard$k.log" 2>&1 &
   pids+=($!); sleep 4
 done
-wait "${pids[@]}" || true
+wait_all "${pids[@]}"
 say "reference done"
 
-say "yardstick stability: independent CRN derivation on 8 states"
+say "yardstick stability: independent CRN derivation on 24 states"
 pids=(); for k in $(seq 0 7); do
   CUDA_VISIBLE_DEVICES=$((k % 4)) python3 scripts/exp073_h4_finite.py --phase ref \
-    --ref-seed-base 190000 --n-states 8 --shard-id $k --num-shards 8 --out-dir "$OUT2" \
+    --ref-seed-base 190000 --n-states 24 --shard-id $k --num-shards 8 --out-dir "$OUT2" \
     >> "$OUT2/ref_shard$k.log" 2>&1 &
   pids+=($!); sleep 4
 done
-wait "${pids[@]}" || true
+wait_all "${pids[@]}"
 say "stability reference done"
 
 say "search arms (vt_plain vs vt_confirm, 2 seeds, 12 shards)"
@@ -39,7 +46,7 @@ pids=(); for k in $(seq 0 11); do
     --shard-id $k --num-shards 12 --out-dir "$OUT" >> "$OUT/search_shard$k.log" 2>&1 &
   pids+=($!); sleep 3
 done
-wait "${pids[@]}" || true
+wait_all "${pids[@]}"
 say "search done"
 
 python3 - <<'PY' | tee -a "$LOG" | tee -a experiments_log.md

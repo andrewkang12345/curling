@@ -14,9 +14,9 @@ instead of by MCTS:
     value(A) = mean_{K1} [ min_B mean_{K2} [ V_h2(s2) ] ]
 
 Every noise draw is a FIXED CRN set shared across root actions, so the table is a
-deterministic function of the state: two runs give identical numbers, and differences
-between root actions are paired (low variance) even though absolute values carry a
-consistent small-pool bias — which is fine, since only the RANKING is used.
+deterministic function of the state and differences between actions are paired.  A second
+independent CRN derivation explicitly measures how sensitive that ranking is to the finite
+noise sets; arm claims must be read against that measured reference floor.
 
 Arms measured against that table:
   * vt_plain  — VecTree root argmax (what EXP-068/069/071/072 used)
@@ -89,8 +89,22 @@ def aggregate():
         rows += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
     if not ref or not rows:
         print(f"incomplete: {len(ref)} reference states, {len(rows)} arm rows")
-        return
+        raise SystemExit(2)
     sids = sorted(ref)
+    expected = {(sid, arm, seed) for sid in sids
+                for arm in ("vt_plain", "vt_confirm")
+                for seed in args.seeds.split(",")}
+    actual = {(r["sid"], r["arm"], r["seed"]) for r in rows}
+    missing = expected - actual
+    extra = actual - expected
+    duplicate_count = len(rows) - len(actual)
+    if missing or extra or duplicate_count:
+        by_arm = {arm: sum(key[1] == arm for key in missing)
+                  for arm in ("vt_plain", "vt_confirm")}
+        print(f"incomplete: {len(ref)} reference states, {len(actual)}/{len(expected)} "
+              f"unique arm rows; missing {by_arm}, extra {len(extra)}, "
+              f"duplicates {duplicate_count}")
+        raise SystemExit(2)
     print(f"EXP-073 h=4 finite-game reference: {len(sids)} states, {len(rows)} arm rows")
     spread = np.mean([ref[s].max() - ref[s].min() for s in sids])
     gap12 = np.mean([np.sort(ref[s])[-1] - np.sort(ref[s])[-2] for s in sids])
@@ -297,7 +311,9 @@ def h2_values(states, cond, seed):
 if args.phase == "ref":
     out_path = OUT / f"ref_shard{args.shard_id}.jsonl"
     done = {json.loads(l)["sid"] for l in out_path.read_text().splitlines()} if out_path.exists() else set()
-    for sid in range(len(SX)):
+    # ``--n-states`` also limits a reference pass when states.npz was copied from a
+    # larger run (the independent yardstick-stability pass uses exactly this case).
+    for sid in range(min(args.n_states, len(SX))):
         if sid % args.num_shards != args.shard_id or sid in done:
             continue
         x, c, pool = SX[sid].astype(np.float32), SC[sid].astype(np.float32), SPOOL[sid].astype(np.float32)

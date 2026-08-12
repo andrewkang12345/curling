@@ -186,8 +186,27 @@ def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, ro
         steps_left -= 1
         cb = np.broadcast_to(cc, (B, 3)).astype(np.float32)
         if value_model is not None and n_search > 1:
-            cands = np.asarray(_sample_actions_batch(policy, amean_t, astd_t, st, cb, n_search, device,
-                                                     temp, std_scale, 0.0), dtype=np.float32).reshape(B, n_search, 4)
+            # The policy GraphTF builds memory-heavy curl-arc edge features.  Confirmation
+            # rollouts can contain >1k trajectories, so expanding every trajectory to
+            # ``n_search`` candidates in one call exceeds a 24 GiB GPU before the already-
+            # chunked value evaluation below is reached.  Honour the same sharing cap as
+            # the single-candidate branch and concatenate on CPU.
+            import os as _os
+            _cap = int(_os.environ.get("POLICY_BATCH_CAP", "0") or 0)
+            if _cap > 0 and B > _cap:
+                _parts = []
+                for _s in range(0, B, _cap):
+                    _parts.append(np.asarray(
+                        _sample_actions_batch(policy, amean_t, astd_t,
+                                              st[_s:_s + _cap], cb[_s:_s + _cap],
+                                              n_search, device, temp, std_scale, 0.0),
+                        dtype=np.float32).reshape(-1, n_search, 4))
+                cands = np.concatenate(_parts, axis=0)
+            else:
+                cands = np.asarray(
+                    _sample_actions_batch(policy, amean_t, astd_t, st, cb, n_search, device,
+                                          temp, std_scale, 0.0),
+                    dtype=np.float32).reshape(B, n_search, 4)
             nc = env_bridge.next_condition(cc, sie)
             # Chunk over candidates so the value-eval batch (B*n_search states) never blows the
             # GNN curl-arc edge-feature memory (an unchunked B*n_search ~= 9k states OOMs at h>=3).
