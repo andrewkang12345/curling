@@ -130,13 +130,21 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 lp = legal[:n_pol]
                 if legal.any() and lp.any():
                     diag.append((int(hh), float(q[legal].max() - q[:n_pol][lp].max())))
-        elif scorer == "vectree":
+        elif scorer in ("vectree", "opp_vectree"):
             # EXP-069: distillation targets from the VECTORISED 4-ply tree (EXP-068's
             # certified operator: monotone regret, beats flat width at >=16k on game
             # value). Terminal/rollout leaves only — no value head inside the tree.
+            # EXP-074 opp_vectree: learner nodes still optimise, while explicit
+            # opponent nodes integrate actions from the fixed opponent model.  The
+            # first reply uses an affordable approximation of its deployed selector;
+            # deeper nodes and the rollout tail follow its raw policy.  A free
+            # minimiser is never substituted for the opponent being exploited.
             from csas.search import _sample_actions_batch
             from .collect import _mc_rollout_terminal_batch
             from .vec_tree import VecTree
+
+            if scorer == "opp_vectree" and opponent is None:
+                raise ValueError("opp_vectree requires --opponent-world or --opponent-mixture")
 
             def _sb(states, cond2, n):
                 cb = np.broadcast_to(np.asarray(cond2, np.float32), (len(states), 3)).astype(np.float32)
@@ -146,11 +154,35 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                                   np.float32).reshape(len(states), n, 4)
 
             def _rb(states, cond2, h2, persp2):
+                def _opp_tail(ss, cb, h3, pb):
+                    # The explicit tree nodes use deployed 48xK selection.  Past the
+                    # depth cap, use the opponent's stochastic policy directly so a
+                    # rollout remains affordable; the approximation is logged in the
+                    # EXP-074 config and can later be replaced by a matchup V leaf.
+                    return opponent.sample_intended_batch(ss, cb, 1)[:, 0, :]
+
                 return _mc_rollout_terminal_batch(policy, amean_t, astd_t,
                                                   np.asarray(states, np.float32),
                                                   np.asarray(cond2, np.float32), int(h2), sie,
                                                   int(persp2), device, rng, noise,
-                                                  cfg.rollout_temp, cfg.std_scale)
+                                                  cfg.rollout_temp, cfg.std_scale,
+                                                  opponent_action_batch_fn=(
+                                                      _opp_tail if scorer == "opp_vectree" else None),
+                                                  opponent_block=(
+                                                      int(opponent_block) if scorer == "opp_vectree" else None))
+
+            def _ob(states, cond2, h2, depth2, n):
+                cb = np.broadcast_to(np.asarray(cond2, np.float32),
+                                     (len(states), 3)).astype(np.float32)
+                if int(depth2) <= int(getattr(cfg, "opponent_model_deploy_depth", 1)):
+                    return opponent.select_intended_batch(
+                        np.asarray(states, np.float32), cb, int(h2), sie,
+                        int(opponent_block), n_actions=int(n),
+                        n_candidates=int(getattr(cfg, "opponent_model_candidates", 16)),
+                        selection_noise_samples=int(getattr(
+                            cfg, "opponent_model_noise_samples", 2)))
+                return opponent.sample_intended_batch(
+                    np.asarray(states, np.float32), cb, int(n))
 
             dense = np.asarray(generate_candidates(policy, amean_t, astd_t, st, cc, cfg, rng, device),
                                np.float32)
@@ -163,7 +195,13 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
             tree = VecTree(st, cc, hh, sie, pool, prior, sample_batch_fn=_sb, rollout_batch_fn=_rb,
                            noise=noise, rng=rng,
                            max_depth=int(getattr(cfg, "vectree_depth", 4)),
-                           wave=32, out_cap=8, inner_pool=8)
+                           wave=32,
+                           out_cap=int(getattr(cfg, "vectree_out_cap", 8)),
+                           root_out_cap=int(getattr(cfg, "vectree_root_out_cap", 0)),
+                           inner_pool=int(getattr(cfg, "vectree_inner_pool", 8)),
+                           opponent_batch_fn=(_ob if scorer == "opp_vectree" else None),
+                           opponent_block=(int(opponent_block) if scorer == "opp_vectree" else None),
+                           opponent_samples=int(getattr(cfg, "opponent_model_actions", 1)))
             tree.run([int(getattr(cfg, "vectree_budget", 16000))])
             acts, q, se, n_vis = tree.root_stats()
             if len(acts) == 0:
@@ -494,8 +532,11 @@ def main():
     ap.add_argument("--games", type=int, default=160, help="games for THIS shard")
     ap.add_argument("--policy", required=True)
     ap.add_argument("--value", required=True)
-    ap.add_argument("--opponent-world", default=None,
-                    help="EXP-065: fixed-opponent ckpt (deployed 48x8 selection) playing one block per game; learner plies get targets, values become matchup returns")
+    opp = ap.add_mutually_exclusive_group()
+    opp.add_argument("--opponent-world", default=None,
+                     help="EXP-065: fixed-opponent ckpt (deployed 48x8 selection) playing one block per game; learner plies get targets, values become matchup returns")
+    opp.add_argument("--opponent-mixture", default=None,
+                     help="JSON manifest of {members:[{name, checkpoint, weight}]} sampled once per game")
     ap.add_argument("--value-world", default=None,
                     help="WorldModel ckpt: its value head evaluates tree leaves "
                          "(closes the V-improves-search loop). Overrides --value.")
@@ -505,7 +546,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=1)
     ap.add_argument("--shard-id", type=int, default=0)
-    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree"], default="tree",
+    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree", "opp_vectree"], default="tree",
                     help="tree = 2-ply KR-UCT with value-head leaves (az_v9); "
                          "terminal = value-free dense-candidate MC-to-terminal operator (az_v10); "
                          "tree_terminal = dense-root KR-UCT to mcts_max_depth + terminal-rollout leaves (az_v11); "
@@ -518,6 +559,9 @@ def main():
 
     cfg: Config = load_config(args.config) if args.config else Config()
     device = torch.device(args.device)
+    torch.manual_seed(int(args.seed) + 17)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(args.seed) + 17)
     env_bridge.warm_jax()
     print(f"[selfplay] RULES: boundary_removal={'ON (real takeout rules)' if env_bridge.BOUNDARY_REMOVAL else 'OFF (HISTORICAL convention!)'}",
           flush=True)
@@ -561,17 +605,60 @@ def main():
     collect_reward = bool(getattr(cfg.search, "collect_step_reward", False))
 
     opponent = None
+    opponents = []
+    opponent_weights = None
+    opponent_names = []
     if args.opponent_world:
         from ..eval.head_to_head import WorldPlayer
         opponent = WorldPlayer(args.opponent_world, device, name="fixed_opponent",
                                noise=make_noise(cfg.search.noise_config, args.seed + 977),
                                sel_noise_samples=8)
+        opponents = [opponent]
+        opponent_weights = np.array([1.0], dtype=np.float64)
+        opponent_names = ["fixed_opponent"]
         print(f"[selfplay] BR mode: fixed opponent = {args.opponent_world} (deployed 48x8)", flush=True)
+    elif args.opponent_mixture:
+        import json
+        from pathlib import Path
+
+        from ..eval.head_to_head import WorldPlayer
+
+        mix_path = Path(args.opponent_mixture)
+        spec = json.loads(mix_path.read_text())
+        members = list(spec.get("members", []))
+        if not members:
+            raise ValueError(f"opponent mixture has no members: {mix_path}")
+        weights = np.asarray([float(m["weight"]) for m in members], dtype=np.float64)
+        if not np.isfinite(weights).all() or (weights < 0).any() or weights.sum() <= 0:
+            raise ValueError(f"invalid opponent mixture weights in {mix_path}: {weights}")
+        opponent_weights = weights / weights.sum()
+        for j, member in enumerate(members):
+            ckpt = Path(member["checkpoint"])
+            if not ckpt.is_absolute():
+                ckpt = (mix_path.parent / ckpt).resolve()
+                if not ckpt.exists():
+                    ckpt = Path(member["checkpoint"]).resolve()
+            if not ckpt.exists():
+                raise FileNotFoundError(f"opponent checkpoint not found: {member['checkpoint']}")
+            name = str(member.get("name", ckpt.stem))
+            opponents.append(WorldPlayer(
+                str(ckpt), device, name=name,
+                noise=make_noise(cfg.search.noise_config, args.seed + 977 + 1009 * j),
+                sel_noise_samples=int(spec.get("selection_noise_samples", 8))))
+            opponent_names.append(name)
+        print("[selfplay] BR mixture: " + ", ".join(
+            f"{n}={w:.3%}" for n, w in zip(opponent_names, opponent_weights)), flush=True)
 
     recs: List[Dict[str, np.ndarray]] = []
-    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree") else None
+    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree", "opp_vectree") else None
     n_games = 0
+    opponent_counts = {name: 0 for name in opponent_names}
+    opponent_rng = np.random.default_rng(args.seed + 104729)
     for i, root in enumerate(roots):
+        if opponents:
+            oi = int(opponent_rng.choice(len(opponents), p=opponent_weights))
+            opponent = opponents[oi]
+            opponent_counts[opponent_names[oi]] += 1
         g = play_game(root, policy, amean_t, astd_t, amean_np, astd_np,
                       value_model, cfg.search, M, rng, device, noise,
                       scorer=args.scorer, diag=diag,
@@ -604,6 +691,9 @@ def main():
         policy_ckpt=args.policy, policy_mtime=_os.path.getmtime(args.policy),
         value_world=args.value_world,
         config=args.config,
+        opponent_world=args.opponent_world,
+        opponent_mixture=args.opponent_mixture,
+        opponent_sample_counts=opponent_counts,
         search=dict(policy_candidates=s.policy_candidates, structured=s.structured_candidates,
                     diverse=s.diverse_candidates, local=s.local_candidates, global_=s.global_candidates,
                     noise_samples=s.noise_samples, noise_config=s.noise_config,
@@ -613,6 +703,14 @@ def main():
                     terminal_rollout_scoring=bool(getattr(s, "terminal_rollout_scoring", False)),
                     value_leaf_bootstrap=bool(getattr(s, "value_leaf_bootstrap", False)),
                     screen_topk=int(getattr(s, "screen_topk", 0)),
+                    vectree_budget=int(getattr(s, "vectree_budget", 0)),
+                    vectree_depth=int(getattr(s, "vectree_depth", 0)),
+                    vectree_root_out_cap=int(getattr(s, "vectree_root_out_cap", 0)),
+                    opponent_model_actions=int(getattr(s, "opponent_model_actions", 1)),
+                    opponent_model_deploy_depth=int(getattr(s, "opponent_model_deploy_depth", 1)),
+                    opponent_model_candidates=int(getattr(s, "opponent_model_candidates", 16)),
+                    opponent_model_noise_samples=int(getattr(s, "opponent_model_noise_samples", 2)),
+                    opponent_tail="raw_policy" if args.scorer == "opp_vectree" else None,
                     rollout_temp=s.rollout_temp, soft_topk=s.soft_topk,
                     policy_temperature=s.policy_temperature),
     )

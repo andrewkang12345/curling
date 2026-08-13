@@ -147,9 +147,115 @@ class WorldPlayer(Player):
         from ..actions import clip_raw
         return clip_raw(a)
 
-    def _value_fn(self, states, cond, batch_size: int = 128):
+    def sample_intended_batch(self, states, conds, n_samples: int = 1):
+        """Sample policy intentions for a batch of states.
+
+        This is the cheap behaviour-policy model used beyond an explicit search
+        depth.  It deliberately does not apply the deployed value selector; use
+        :meth:`select_intended_batch` for opponent nodes inside the tree.
+        """
+        import os
+
+        from ..actions import clip_raw
+
+        torch = self._torch
+        states = np.asarray(states, dtype=np.float32).reshape(-1, 24)
+        conds = np.asarray(conds, dtype=np.float32)
+        if conds.ndim == 1:
+            conds = np.broadcast_to(conds, (len(states), 3)).copy()
+        else:
+            conds = conds.reshape(len(states), 3)
+        n_samples = max(1, int(n_samples))
+        cap = max(1, int(os.environ.get("POLICY_BATCH_CAP", "0") or len(states)))
+        parts = []
+        with torch.no_grad():
+            for start in range(0, len(states), cap):
+                stop = min(len(states), start + cap)
+                xt = torch.as_tensor(states[start:stop], dtype=torch.float32, device=self.device)
+                ct = torch.as_tensor(conds[start:stop], dtype=torch.float32, device=self.device)
+                pi, mu, tril = self.model.policy(self.model.encode(xt, ct))
+                z = self._sample_z(pi, mu, tril, n_samples=n_samples,
+                                   temperature=self.temp, std_scale=self.std)
+                a = z * self.model.action_std + self.model.action_mean
+                parts.append(a.float().cpu().numpy())
+        return clip_raw(np.concatenate(parts, axis=0).astype(np.float32))
+
+    def select_intended_batch(self, states, conds, horizon, shots_in_end,
+                              perspective_block, n_actions: int = 1,
+                              n_candidates: Optional[int] = None,
+                              selection_noise_samples: Optional[int] = None):
+        """Batched deployed 48xK selection for opponent-model search.
+
+        Returns ``[B, n_actions, 4]``.  Each requested action gets an independent
+        policy candidate set and is ranked with the same value/noise semantics as
+        :meth:`select_intended`.  Multiple actions therefore form Monte-Carlo
+        samples from the deployed opponent strategy, not candidates to minimise.
+        """
+        states = np.asarray(states, dtype=np.float32).reshape(-1, 24)
+        conds = np.asarray(conds, dtype=np.float32)
+        if conds.ndim == 1:
+            conds = np.broadcast_to(conds, (len(states), 3)).copy()
+        else:
+            conds = conds.reshape(len(states), 3)
+        B = len(states)
+        n_actions = max(1, int(n_actions))
+        n_candidates = self.n if n_candidates is None else max(1, int(n_candidates))
+        rep_states = np.repeat(states, n_actions, axis=0)
+        rep_conds = np.repeat(conds, n_actions, axis=0)
+        R = len(rep_states)
+
+        cands = self.sample_intended_batch(rep_states, rep_conds, n_candidates)
+        requested_ns = (self.sel_noise_samples if selection_noise_samples is None
+                        else selection_noise_samples)
+        ns = int(requested_ns) if self.noise is not None else 0
+        if ns > 0:
+            executed = self.noise.sample_batch(cands, ns).reshape(R, n_candidates, ns, 4)
+        else:
+            ns = 1
+            executed = cands[:, :, None, :]
+
+        flat_actions = executed.reshape(-1, 4)
+        repeats = n_candidates * ns
+        flat_states = np.repeat(rep_states, repeats, axis=0)
+        flat_conds = np.repeat(rep_conds, repeats, axis=0)
+        posts = env_bridge.simulate_batched(flat_states, flat_conds, flat_actions)
+        illegal = np.zeros(len(posts), dtype=bool)
+        for r in range(R):
+            sl = slice(r * repeats, (r + 1) * repeats)
+            posts[sl], illegal[sl] = env_bridge.apply_legality(
+                rep_states[r], posts[sl], int(horizon), rep_conds[r])
+
+        if int(horizon) <= 1:
+            persp = np.asarray(perspective_block)
+            if persp.ndim == 0:
+                persp = np.full(R, int(persp), dtype=np.int64)
+            else:
+                persp = np.repeat(persp.reshape(B), n_actions)
+            q_flat = np.empty(len(posts), dtype=np.float64)
+            for r in range(R):
+                sl = slice(r * repeats, (r + 1) * repeats)
+                q_flat[sl] = [env_bridge.score_end(p, int(persp[r])) for p in posts[sl]]
+        else:
+            next_conds = np.stack([
+                env_bridge.next_condition(rep_conds[r], int(shots_in_end))
+                for r in range(R)
+            ])
+            q_flat = -self._value_fn(posts, np.repeat(next_conds, repeats, axis=0)).astype(np.float64)
+
+        q_exec = q_flat.reshape(R, n_candidates, ns)
+        q = q_exec.mean(axis=2)
+        q = np.where(illegal.reshape(R, n_candidates, ns).any(axis=2), -1.0e6, q)
+        best = np.argmax(q, axis=1)
+        chosen = cands[np.arange(R), best]
+        return chosen.reshape(B, n_actions, 4).astype(np.float32)
+
+    def _value_fn(self, states, cond, batch_size: Optional[int] = None):
         # chunked: the GraphTF curl-arc edge features allocate O(batch·stones²·arcs);
         # noise-expanded candidate sets (e.g. 48x8=384 posts) spike several GB unchunked
+        import os
+
+        if batch_size is None:
+            batch_size = int(os.environ.get("VALUE_EVAL_BATCH", "128") or 128)
         torch = self._torch
         states = np.asarray(states, dtype=np.float32)
         c = np.broadcast_to(cond, (len(states), 3)).astype(np.float32)

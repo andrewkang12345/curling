@@ -52,10 +52,16 @@ class _Budget:
 class _Dec:
     """Decision node (a team is about to throw)."""
     __slots__ = ("x", "c", "h", "depth", "pool", "prior", "n_open",
-                 "edge_n", "edge_sum", "edge_sq", "edge_vl", "chance")
+                 "edge_n", "edge_sum", "edge_sq", "edge_vl", "chance",
+                 "integrate_actions")
 
-    def __init__(self, x, c, h, depth):
+    def __init__(self, x, c, h, depth, integrate_actions=False):
         self.x, self.c, self.h, self.depth = x, c, int(h), int(depth)
+        # Normal search nodes optimise for the team to move.  An opponent-model
+        # node instead integrates actions sampled from the fixed opponent policy;
+        # minimising over those samples would silently turn the oracle back into
+        # free minimax search.
+        self.integrate_actions = bool(integrate_actions)
         self.pool = None          # [M,4] candidate intents (None until assigned)
         self.prior = None
         self.n_open = 0
@@ -65,7 +71,7 @@ class _Dec:
         self.edge_vl = None
         self.chance: Dict[int, "_Chance"] = {}
 
-    def set_pool(self, pool, prior):
+    def set_pool(self, pool, prior, open_all=False):
         self.pool = np.asarray(pool, np.float32)
         self.prior = np.asarray(prior, np.float64)
         m = len(self.pool)
@@ -73,7 +79,7 @@ class _Dec:
         self.edge_sum = np.zeros(m, np.float64)
         self.edge_sq = np.zeros(m, np.float64)
         self.edge_vl = np.zeros(m, np.float64)
-        self.n_open = 1           # open the top-prior action immediately
+        self.n_open = m if open_all else 1  # model samples are all part of the expectation
 
 
 class _Chance:
@@ -93,7 +99,8 @@ class VecTree:
                  noise, rng, c_puct: float = 1.5, bw: float = 1e-9,
                  min_evidence: int = 8, out_cap: int = 8, inner_pool: int = 8,
                  max_depth: int = 4, wave: int = 32, root_out_cap: int = 0,
-                 rollout_mult: int = 1):
+                 rollout_mult: int = 1, opponent_batch_fn: Optional[Callable] = None,
+                 opponent_block: Optional[int] = None, opponent_samples: int = 1):
         self.sie = int(sie)
         self.sample_batch_fn = sample_batch_fn   # (states[B,24], cond[3], n) -> [B,n,4]
         self.rollout_batch_fn = rollout_batch_fn  # (states[B,24], cond[3], h, persp) -> [B]
@@ -101,6 +108,9 @@ class VecTree:
         self.c_puct, self.bw = float(c_puct), float(bw)
         self.min_evidence, self.out_cap = int(min_evidence), int(out_cap)
         self.inner_pool, self.max_depth, self.wave = int(inner_pool), int(max_depth), int(wave)
+        self.opponent_batch_fn = opponent_batch_fn
+        self.opponent_block = None if opponent_block is None else int(opponent_block)
+        self.opponent_samples = max(1, int(opponent_samples))
         # EXP-069 adjudicator: the ROOT chance node integrates over many more execution
         # outcomes (the root expectation is the quantity being reported), and rollout
         # cost is multiplied when the tail policy itself searches (value-greedy steps).
@@ -134,6 +144,14 @@ class VecTree:
 
     def _select(self, node: _Dec) -> int:
         k = node.n_open
+        if node.integrate_actions:
+            # Allocate visits in proportion to the sampled-policy prior.  The
+            # parent backup then estimates E_{a~pi_opp}[return], rather than the
+            # worst sampled reply.  Virtual visits keep a wave balanced too.
+            visits = node.edge_n[:k] + node.edge_vl[:k]
+            prior = node.prior[:k] / max(float(node.prior[:k].sum()), 1e-12)
+            target = prior * (float(visits.sum()) + 1.0)
+            return int(np.argmax(target - visits))
         V, W = _kr(node.pool[:k].astype(np.float64), node.edge_n[:k], node.edge_sum[:k], self.bw)
         W_eff = W + node.edge_vl[:k]                  # virtual loss suppresses re-selection
         to_move = int(round(node.c[2]))
@@ -205,7 +223,12 @@ class VecTree:
             nc = env_bridge.next_condition(c_par, self.sie)
             for k, i in enumerate(idxs):
                 node, ch = sels[i][2]
-                child = _Dec(posts[k], nc, node.h - 1, node.depth + 1)
+                child_block = int(round(nc[2]))
+                model_opponent = (self.opponent_batch_fn is not None and
+                                  self.opponent_block is not None and
+                                  child_block == self.opponent_block)
+                child = _Dec(posts[k], nc, node.h - 1, node.depth + 1,
+                             integrate_actions=model_opponent)
                 ch.outcomes.append(child)
                 ch.out_n.append(0.0)
                 ch.out_vl.append(0.0)
@@ -239,10 +262,19 @@ class VecTree:
         for depth, idxs in by_d2.items():
             states = np.stack([new_nodes[i].x for i in idxs])
             cond = new_nodes[idxs[0]].c
-            pools = self.sample_batch_fn(states, cond, self.inner_pool)
-            unif = np.full(self.inner_pool, 1.0 / self.inner_pool)
+            if new_nodes[idxs[0]].integrate_actions:
+                pools = self.opponent_batch_fn(states, cond, new_nodes[idxs[0]].h,
+                                               new_nodes[idxs[0]].depth,
+                                               self.opponent_samples)
+                pools = np.asarray(pools, np.float32).reshape(
+                    len(states), self.opponent_samples, 4)
+                unif = np.full(self.opponent_samples, 1.0 / self.opponent_samples)
+            else:
+                pools = self.sample_batch_fn(states, cond, self.inner_pool)
+                unif = np.full(self.inner_pool, 1.0 / self.inner_pool)
             for k, i in enumerate(idxs):
-                new_nodes[i].set_pool(pools[k], unif)
+                new_nodes[i].set_pool(pools[k], unif,
+                                      open_all=new_nodes[i].integrate_actions)
 
         # ---- 4. backup ----
         for idx, (path, kind, payload) in enumerate(sels):

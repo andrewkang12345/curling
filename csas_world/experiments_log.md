@@ -2674,3 +2674,53 @@ rows exist. The six failed shards were resumed one-per-GPU in two waves. Also fi
 `--n-states` to limit a reference pass even when its `states.npz` was copied from a larger
 run; the reproducible chain explicitly requests all 24 stability states. The repaired run
 passed the 96-key completeness gate and finished at 2026-08-12 20:30:49 UTC.
+
+## EXP-074 / az_v28_oppbr_meta — OPPONENT-MODEL BEST RESPONSE TO META-NASH — IN FLIGHT 2026-08-13
+
+**Question.** Before committing to PSRO, can we confidently train an approximate best
+response to the current empirical Nash mixture?  EXP-065 proved one large fixed-opponent
+exploit was learnable, but EXP-067 did not compound; EXP-069 was self-play minimax, not a
+BR test, and its search teacher was subsequently retracted.  This is the missing response-
+oracle experiment.
+
+**Opponent distribution.** The provisional EXP-070 mixture is fixed before collection:
+v26 65.2%, v19 20.3%, v14d 14.5% (`configs/opponents/exp070_meta_nash.json`).  A population
+member is assigned once per game; the learner plays both blocks across the corpus.  The
+three weak cycle-critical payoff cells have not yet received their high-N confirmation,
+so success certifies a response to this measured mixture, not to a final game solution.
+
+**Operator.** New `opp_vectree` mode.  At learner nodes VecTree maximises.  At modeled
+opponent nodes it INTEGRATES actions sampled from that opponent instead of minimising over
+free replies.  The first explicit opponent reply uses a batched 16-candidate x 2-noise
+approximation to the opponent's deployed 48x8 value selector; the second explicit reply
+and the post-depth-cap tail use its raw stochastic policy.  Actual opponent turns in the
+collected game remain exact deployed 48x8.  Search is four plies, 16k simulator calls per
+learner decision, root_out_cap=64, terminal rule-score rollout tail.  Root candidates are
+v25 policy plus structured/global support.  Only learner plies receive policy targets;
+all plies receive realized matchup-return value targets.  Learner/init = az_v25_br.
+
+**Why approximate the selector.** An exact deployed 48x8 model at every interior opponent
+node made a 512-simulation smoke exceed three minutes before completing.  Modeling only
+the first reply but at 48x8 was still about two minutes/end at 512.  The pre-registered
+16x2 first-reply approximation completed the full 10-record smoke successfully; this is
+the fundable oracle.  It never substitutes free minimax, but it can miss differences
+between 16x2 and the arena's 48x8 and must ultimately be judged against exact deployed
+opponents.
+
+**Collection/training plan.** Target 480 full ends = 4,800 horizon-balanced records, with
+312/96/72 games assigned to v26/v19/v14d.  Fine-tune v25 with the established matchup-
+return recipe and guard 5.5.  The smoke corpus is excluded.  Every shard must contain all
+ten horizons and a complete provenance manifest; any worker failure is fatal.
+
+**Pre-registered gate.** Evaluate the trained policy independently against all three
+mixture members, both throwing orders and all h1-h10, then weight the three dScores by
+65.2/20.3/14.5.  A profitable response is certified only if expected dScore versus the
+mixture is positive at t>=2.1; otherwise report parity/negative without promotion.  Also
+report every component payoff so a gain cannot be hidden as a single-member specialist.
+If the first training run certifies, repeat training with a second seed before treating
+`opp_vectree` as a dependable PSRO oracle.
+
+**Smoke (2026-08-13 00:00 UTC).** Batched opponent selection passed finite/shape checks.
+One mixture-sampled full end at budget 512 completed: 10/10 records, correct h10..h1,
+opponent=v26, learner targets only on its alternating plies, 1/5 learner plies passed the
+t>=2 distillation gate.  GPU peak with all three mixture members loaded was 4.3 GiB.

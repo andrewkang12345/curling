@@ -163,7 +163,9 @@ def _legality_batch(pre: np.ndarray, posts: np.ndarray, horizon: int, cond: np.n
 def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, root_persp,
                                device, rng, noise, temp, std_scale,
                                value_model=None, n_search=1,
-                               max_steps=0, leaf_value_model=None) -> np.ndarray:
+                               max_steps=0, leaf_value_model=None,
+                               opponent_action_batch_fn=None,
+                               opponent_block=None) -> np.ndarray:
     """Roll from each state to terminal; return realized end margins (root persp). With
     ``value_model`` + ``n_search>1`` (EXP-014 "search-based rollout"): at each ply the to-move
     player plays VALUE-GREEDY -- sample n_search policy candidates, and pick the one that minimises
@@ -185,7 +187,14 @@ def _mc_rollout_terminal_batch(policy, amean_t, astd_t, states, cond, h, sie, ro
             return sign * v
         steps_left -= 1
         cb = np.broadcast_to(cc, (B, 3)).astype(np.float32)
-        if value_model is not None and n_search > 1:
+        model_opponent = (opponent_action_batch_fn is not None and
+                          opponent_block is not None and
+                          int(round(cc[2])) == int(opponent_block))
+        if model_opponent:
+            acts = np.asarray(
+                opponent_action_batch_fn(st, cb, hh, int(opponent_block)),
+                dtype=np.float32).reshape(B, 4)
+        elif value_model is not None and n_search > 1:
             # The policy GraphTF builds memory-heavy curl-arc edge features.  Confirmation
             # rollouts can contain >1k trajectories, so expanding every trajectory to
             # ``n_search`` candidates in one call exceeds a 24 GiB GPU before the already-

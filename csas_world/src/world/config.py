@@ -166,6 +166,13 @@ class SearchCfg:
     # EXP-069 "vectree" scorer (vectorised 4-ply tree targets, EXP-068-certified):
     vectree_budget: int = 16000     # simulator calls per decision
     vectree_depth: int = 4          # search plies
+    vectree_out_cap: int = 8        # execution outcomes retained at interior chance nodes
+    vectree_root_out_cap: int = 0   # 0 inherits out_cap; use >=64 for a stable root expectation
+    vectree_inner_pool: int = 8     # learner proposals at interior decision nodes
+    opponent_model_actions: int = 1 # deployed-opponent intentions integrated per explicit node
+    opponent_model_deploy_depth: int = 1 # exact selector through this tree depth; raw policy deeper
+    opponent_model_candidates: int = 16 # affordable approximation to deployed 48-candidate selector
+    opponent_model_noise_samples: int = 2 # executions used to rank each modeled candidate
     # EXP-063 "bigsel" scorer (big-budget self-distillation teacher, EXP-062 T2):
     bigsel_candidates: int = 192     # policy proposals (deployed-selection family)
     bigsel_k: int = 64               # noise realizations per candidate (CRN)

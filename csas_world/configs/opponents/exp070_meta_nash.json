@@ -1,0 +1,23 @@
+{
+  "name": "exp070_empirical_meta_nash",
+  "source": "EXP-070 screening matrix, 2026-08-10",
+  "status": "provisional; three cycle-critical cells still need high-N confirmation",
+  "selection_noise_samples": 8,
+  "members": [
+    {
+      "name": "v26",
+      "checkpoint": "../../checkpoints/csas_world/az_v26_br2/best.pt",
+      "weight": 0.652
+    },
+    {
+      "name": "v19",
+      "checkpoint": "../../checkpoints/csas_world/az_v19_newrules/best.pt",
+      "weight": 0.203
+    },
+    {
+      "name": "v14d",
+      "checkpoint": "../../checkpoints/csas_world/az_v14d/best.pt",
+      "weight": 0.145
+    }
+  ]
+}
