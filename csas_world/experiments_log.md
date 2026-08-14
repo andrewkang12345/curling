@@ -2850,3 +2850,16 @@ weakened and no extra collection is triggered after seeing the result.
 10/10 h10..h1 records, correct scorer/provenance and learner-only masking, exact deployed
 opponent, finite arrays, and 1/5 learner plies passing the t>=2 gate.  It selected v14d and
 is excluded from every corpus and claim.  Driver: `scripts/_exp076_bigsel_meta.sh`.
+
+**Arena v2.4 implementation during evaluation (2026-08-14; no EXP-076 change).** The
+arena gained an always-visible four-slider raw-delivery panel; every draw/contact/tap/
+takeout/hit-roll solve writes its solved `[speed,angle,spin,y0]` back into those sliders.
+Explicit raw throws now have an arena-only expanded box: release offset ±1.2192 m (four
+feet) and spin ±31.1 rad/s, empirically giving 1.2199 m lateral curl at 2.50 m/s from a
+straight centred release.  The trained-model action constants remain ±0.23 m / ±7 rad/s,
+so existing checkpoints and EXP-076 are not reinterpreted.  Realized execution noise now
+accepts independently persisted 0–5× speed/aim/curl/offset scales; the generic LocalNoise
+implementation exposes the same hook for a later training migration.  A persisted sandbox
+editor/API saves and reloads arbitrary legal non-overlapping boards plus end, next throw,
+hammer, score, and player side, then starts a normal match at that root.  Unit/API smoke,
+JavaScript syntax, DOM-id, curl-calibration, and regression checks passed before deployment.

@@ -33,12 +33,24 @@
       <button class="bigbtn newgame" data-kind="champ">🤖 Play the Champion</button>
       <button class="subbtn newgame" data-kind="hotseat">👥 Pass &amp; play</button>
       <button class="subbtn newgame" data-kind="online">🌐 Online with a friend</button>
+      <button class="subbtn" id="sandboxBtn">🧪 Build a sandbox position</button>
     </div>
     <div class="endsrow">Ends:
       <button class="chip endsel" data-ends="2">2</button>
       <button class="chip endsel sel" data-ends="4">4</button>
       <button class="chip endsel" data-ends="8">8</button>
     </div>
+    <details class="settingsbox">
+      <summary>Execution noise</summary>
+      <label class="checkrow"><input id="setupNoiseOn" type="checkbox" checked> Apply execution noise</label>
+      <div class="noisegrid" id="setupNoiseGrid">
+        <label>Speed <output id="setupNoiseV0">1.0×</output><input class="setup-noise" data-i="0" type="range" min="0" max="5" step="0.1" value="1"></label>
+        <label>Aim <output id="setupNoiseV1">1.0×</output><input class="setup-noise" data-i="1" type="range" min="0" max="5" step="0.1" value="1"></label>
+        <label>Curl <output id="setupNoiseV2">1.0×</output><input class="setup-noise" data-i="2" type="range" min="0" max="5" step="0.1" value="1"></label>
+        <label>Offset <output id="setupNoiseV3">1.0×</output><input class="setup-noise" data-i="3" type="range" min="0" max="5" step="0.1" value="1"></label>
+      </div>
+      <p class="microhint">Multipliers relative to the fitted arena noise; 0× makes that parameter exact.</p>
+    </details>
     <div class="joinrow">
       <input id="joinCode" placeholder="Paste an invite link or code" inputmode="text">
       <button id="joinBtn" class="subbtn">Join</button>
@@ -46,6 +58,8 @@
   </div>
   <h2 class="section">Recent matches</h2>
   <div id="matchList"><p class="hint">Loading…</p></div>
+  <h2 class="section">Saved sandbox positions</h2>
+  <div id="scenarioList"><p class="hint">Loading…</p></div>
   <p class="hint" style="text-align:center" id="verline"></p>
 </div>
 
@@ -63,6 +77,7 @@
     <div class="moderow">
       <button class="chip modechip sel" data-m="draw">🎯 Draw to spot</button>
       <button class="chip modechip" data-m="hit">💥 Play a stone</button>
+      <button class="chip modechip" data-m="params">🎚 Parameters</button>
       <span class="spacer" style="flex:1"></span>
       <button id="undoBtn" class="chip">↩︎ Undo</button>
     </div>
@@ -71,6 +86,26 @@
       <button class="chip hitopt" data-h="tap">Tap it to a spot</button>
       <button class="chip hitopt" data-h="roll">Hit &amp; roll</button>
     </div>
+    <details id="paramPanel" class="settingsbox paramsettings" open>
+      <summary>Throw parameters <span class="summarynote">speed · aim · curl · release</span></summary>
+      <div class="paramgrid">
+        <label>Speed <output id="paramV0">2.500 m/s</output><input class="param-range" data-i="0" type="range" min="2.2" max="3.01" step="0.005" value="2.5"></label>
+        <label>Aim angle <output id="paramV1">0.0000 rad</output><input class="param-range" data-i="1" type="range" min="-0.1038" max="0.1038" step="0.0002" value="0"></label>
+        <label>Curl <output id="paramV2">7.0 rad/s</output><input class="param-range" data-i="2" type="range" min="-31.1" max="31.1" step="0.1" value="7"></label>
+        <label>Release offset <output id="paramV3">0.000 m</output><input class="param-range" data-i="3" type="range" min="-1.2192" max="1.2192" step="0.002" value="0"></label>
+      </div>
+      <p class="microhint">Selecting a draw, tap, takeout, or hit-and-roll updates these to the solved delivery. Moving a slider switches to parameter mode.</p>
+    </details>
+    <details id="gameNoisePanel" class="settingsbox">
+      <summary>Execution noise <span id="gameNoiseSummary" class="summarynote">on · 1× each</span></summary>
+      <label class="checkrow"><input id="gameNoiseOn" type="checkbox" checked> Apply execution noise</label>
+      <div class="noisegrid">
+        <label>Speed <output id="gameNoiseV0">1.0×</output><input class="game-noise" data-i="0" type="range" min="0" max="5" step="0.1" value="1"></label>
+        <label>Aim <output id="gameNoiseV1">1.0×</output><input class="game-noise" data-i="1" type="range" min="0" max="5" step="0.1" value="1"></label>
+        <label>Curl <output id="gameNoiseV2">1.0×</output><input class="game-noise" data-i="2" type="range" min="0" max="5" step="0.1" value="1"></label>
+        <label>Offset <output id="gameNoiseV3">1.0×</output><input class="game-noise" data-i="3" type="range" min="0" max="5" step="0.1" value="1"></label>
+      </div>
+    </details>
     <div class="actionrow">
       <button id="throwBtn" class="throwbtn" disabled>Throw</button>
       <button id="previewBtn" class="subbtn hidden">Preview</button>
@@ -83,6 +118,34 @@
     <div class="moderow">
       <button id="heatBtn" class="chip">🔥 Best-spot map</button>
     </div>
+  </div>
+</div>
+
+<!-- ============ SANDBOX EDITOR ============ -->
+<div id="view-sandbox" class="view hidden">
+  <div class="backrow"><button id="sandboxBack" class="linky">← Home</button></div>
+  <div class="statusbar"><b>Sandbox position builder</b> · tap the sheet to place stones</div>
+  <div class="sandboxmeta">
+    <label class="wide">Name <input id="scenarioName" maxlength="80" value="Untitled position"></label>
+    <label>End <input id="scenarioEnd" type="number" min="1" max="20" value="1"></label>
+    <label>Next throw <input id="scenarioThrow" type="number" min="1" max="10" value="1"></label>
+    <label>Hammer <select id="scenarioHammer"><option value="B">Yellow</option><option value="A">Red</option></select></label>
+    <label>Red score <input id="scenarioScoreA" type="number" min="0" max="99" value="0"></label>
+    <label>Yellow score <input id="scenarioScoreB" type="number" min="0" max="99" value="0"></label>
+    <label>Play as <select id="scenarioPlayAs"><option value="A">Red</option><option value="B">Yellow</option></select></label>
+    <label>Total ends <input id="scenarioEnds" type="number" min="1" max="20" value="8"></label>
+  </div>
+  <div class="moderow sandbox-tools">
+    <button class="chip stone-tool sel" data-tool="A"><span class="dot red"></span> Place red</button>
+    <button class="chip stone-tool" data-tool="B"><span class="dot yel"></span> Place yellow</button>
+    <button class="chip stone-tool" data-tool="erase">⌫ Remove</button>
+    <button id="scenarioClear" class="chip">Clear</button>
+  </div>
+  <div class="boardwrap"><canvas id="sboard" class="board"></canvas></div>
+  <p id="scenarioHint" class="hint">Place up to six stones per team. Tap Remove, then a stone, to erase it.</p>
+  <div class="actionrow">
+    <button id="scenarioSave" class="subbtn">Save position</button>
+    <button id="scenarioPlay" class="throwbtn">Save &amp; play</button>
   </div>
 </div>
 

@@ -142,3 +142,46 @@ canvas.board {
 .joinrow input { flex: 1; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line);
   background: var(--panel2); color: var(--ink); font-size: 14px; min-height: 44px; }
 .subbtn.active { border-color: var(--accent); color: var(--accent); }
+
+/* v2.4: raw delivery controls, per-parameter noise, sandbox editor */
+.settingsbox {
+  margin: 10px 0; padding: 9px 11px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; text-align: left;
+}
+.hero .settingsbox { background: rgba(11,18,32,.35); }
+.settingsbox summary { cursor: pointer; color: var(--ink); font-size: 13.5px; font-weight: 650; }
+.summarynote { color: var(--muted); font-weight: 400; margin-left: 5px; }
+.paramgrid, .noisegrid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 14px;
+  margin-top: 10px;
+}
+.paramgrid label, .noisegrid label {
+  color: var(--muted); font-size: 12.5px; min-width: 0;
+}
+.paramgrid output, .noisegrid output {
+  float: right; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.paramgrid input[type=range], .noisegrid input[type=range] {
+  display: block; width: 100%; height: 28px; accent-color: var(--accent);
+}
+.checkrow { display: block; color: var(--muted); font-size: 13px; margin-top: 10px; }
+.checkrow input { accent-color: var(--accent); }
+.microhint { color: var(--muted); font-size: 11.5px; margin: 5px 0 0; }
+.paramsettings { margin-top: 0; }
+.sandboxmeta {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px;
+  margin-bottom: 12px;
+}
+.sandboxmeta label { color: var(--muted); font-size: 12.5px; }
+.sandboxmeta label.wide { grid-column: 1 / -1; }
+.sandboxmeta input, .sandboxmeta select {
+  display: block; width: 100%; margin-top: 3px; min-height: 40px;
+  border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px;
+  background: var(--panel2); color: var(--ink); font: inherit;
+}
+.sandbox-tools .dot { margin-right: 4px; vertical-align: -1px; }
+
+@media (max-width: 430px) {
+  .paramgrid, .noisegrid { grid-template-columns: 1fr; gap: 6px; }
+  .settingsbox { padding: 8px 10px; }
+}

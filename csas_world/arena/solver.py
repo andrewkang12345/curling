@@ -32,7 +32,8 @@ import numpy as np
 from world import env_bridge
 from world.actions import ACTION_HIGH, ACTION_LOW, clip_raw
 
-from .engine import DEFAULT_NOISE_CFG, NUM_STONES, POS_MAX, SIM_LOCK, live_slots
+from .engine import (DEFAULT_NOISE_CFG, NUM_STONES, POS_MAX, SIM_LOCK,
+                     clip_arena_action, live_slots)
 
 _NOISE = None
 
@@ -607,7 +608,7 @@ def solve(x: np.ndarray, c: np.ndarray, req: Dict[str, Any]) -> Tuple[np.ndarray
     seed = int(req.get("seed", 0))
     if kind == "params":
         a = np.asarray(req["action"], dtype=np.float32).reshape(4)
-        clipped = clip_raw(a)
+        clipped = clip_arena_action(a)
         info = {"clipped": bool(np.any(np.abs(clipped - a) > 1e-9))}
         return clipped, info
     if kind == "draw":

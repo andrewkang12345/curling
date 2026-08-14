@@ -32,12 +32,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from world import env_bridge
-from world.actions import ACTION_HIGH, ACTION_LOW, ACTION_NAMES, clip_raw
+from world.actions import ACTION_HIGH, ACTION_LOW, ACTION_NAMES
 from world.preplaced import PREPLACED_SHOTS_IN_END, board_norm
 from world.search.noise import make_noise
 
 ARENA_DIR = Path(__file__).resolve().parent
 MATCH_DIR = ARENA_DIR / "matches"
+SCENARIO_DIR = ARENA_DIR / "scenarios"
 
 SHOTS_IN_END = PREPLACED_SHOTS_IN_END  # 10 thrown stones per mixed-doubles end
 NUM_STONES = env_bridge.NUM_STONES
@@ -48,6 +49,32 @@ DEFAULT_CKPT = os.environ.get(
 DEFAULT_NOISE_CFG = os.environ.get("ARENA_NOISE_CFG", "configs/noise/v2_fullsheet.json")
 CHAMPION_CANDIDATES = int(os.environ.get("ARENA_CHAMPION_CANDIDATES", "48"))
 CHAMPION_NOISE_SAMPLES = int(os.environ.get("ARENA_CHAMPION_NOISE_SAMPLES", "8"))
+
+# Arena-only extended delivery box.  The currently trained policy still uses
+# world.actions.ACTION_{LOW,HIGH}; changing those constants would reinterpret
+# every existing checkpoint.  Raw human throws may use the larger physical box
+# now, while a future collection/training migration can expand model space
+# explicitly.  At button-draw weight (2.50 m/s), |spin|=31.1 rad/s produces
+# 1.219 m (four feet) of simulated lateral curl from a centred, straight release.
+FOUR_FEET_M = 4.0 * 0.3048
+ARENA_CURL_MAX = 31.1
+ARENA_ACTION_LOW = ACTION_LOW.copy()
+ARENA_ACTION_HIGH = ACTION_HIGH.copy()
+ARENA_ACTION_LOW[2:] = np.asarray([-ARENA_CURL_MAX, -FOUR_FEET_M], dtype=np.float32)
+ARENA_ACTION_HIGH[2:] = np.asarray([ARENA_CURL_MAX, FOUR_FEET_M], dtype=np.float32)
+DEFAULT_NOISE_SCALES = np.ones(4, dtype=np.float32)
+
+
+def clip_arena_action(action: np.ndarray) -> np.ndarray:
+    """Clip a raw physical delivery to the arena box (not the model box)."""
+    return np.clip(np.asarray(action, dtype=np.float32), ARENA_ACTION_LOW, ARENA_ACTION_HIGH)
+
+
+def normalize_noise_scales(scales: Optional[List[float]]) -> List[float]:
+    a = DEFAULT_NOISE_SCALES.copy() if scales is None else np.asarray(scales, dtype=np.float32)
+    if a.shape != (4,) or not np.isfinite(a).all() or np.any(a < 0.0) or np.any(a > 5.0):
+        raise ValueError("noise_scales must be four finite values between 0 and 5")
+    return [round(float(v), 4) for v in a]
 
 # One lock serializes every JAX / torch call (FastAPI sync endpoints run in a
 # threadpool; the sim + model stack is not re-entrant).
@@ -82,6 +109,85 @@ def live_slots(state_norm: np.ndarray) -> np.ndarray:
     from csas.common import in_play_raw
 
     return np.where(in_play_raw(raw))[0]
+
+
+def normalize_scenario(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and canonicalize a saved sandbox position."""
+    name = str(payload.get("name") or "Untitled position").strip()[:80]
+    hammer = str(payload.get("hammer", "B"))
+    if hammer not in ("A", "B"):
+        raise ValueError('hammer must be "A" or "B"')
+    next_throw = int(payload.get("throw", 1))
+    if not 1 <= next_throw <= SHOTS_IN_END:
+        raise ValueError(f"throw must be between 1 and {SHOTS_IN_END}")
+    end_no = int(payload.get("end", 1))
+    if not 1 <= end_no <= 20:
+        raise ValueError("end must be between 1 and 20")
+    totals = payload.get("totals") or {"A": 0, "B": 0}
+    totals = {s: int(totals.get(s, 0)) for s in ("A", "B")}
+    if any(v < 0 or v > 99 for v in totals.values()):
+        raise ValueError("scenario scores must be between 0 and 99")
+
+    used: set[int] = set()
+    next_slot = {"A": 0, "B": 6}
+    stones: List[Dict[str, Any]] = []
+    for raw_stone in payload.get("stones") or []:
+        team = str(raw_stone.get("team", ""))
+        if team not in ("A", "B"):
+            raise ValueError('every stone team must be "A" or "B"')
+        slot_value = raw_stone.get("slot")
+        if slot_value is None:
+            slot = next((i for i in range(0 if team == "A" else 6,
+                                         6 if team == "A" else 12) if i not in used), -1)
+        else:
+            slot = int(slot_value)
+        if slot in used or slot < (0 if team == "A" else 6) or slot >= (6 if team == "A" else 12):
+            raise ValueError(f"invalid or duplicate slot {slot} for Team {team}")
+        along = float(raw_stone.get("along"))
+        lateral = float(raw_stone.get("lateral"))
+        if not np.isfinite([along, lateral]).all():
+            raise ValueError("stone coordinates must be finite")
+        if not (-6.7056 <= along <= env_bridge.BACK_LINE_REMOVE_M):
+            raise ValueError(f"stone along coordinate {along:.3f} is outside the playable sheet")
+        if abs(lateral) > env_bridge.SIDE_REMOVE_M:
+            raise ValueError(f"stone lateral coordinate {lateral:.3f} is outside the playable sheet")
+        if any(np.hypot(along - s["along"], lateral - s["lateral"]) < 0.290
+               for s in stones):
+            raise ValueError("stones may not overlap (centers need at least 0.290 m separation)")
+        used.add(slot)
+        next_slot[team] = max(next_slot[team], slot + 1)
+        stones.append({"slot": slot, "team": team,
+                       "along": round(along, 4), "lateral": round(lateral, 4)})
+
+    first_team = "B" if hammer == "A" else "A"
+    parity = (next_throw - 1) % 2
+    turn = first_team if parity == 0 else hammer
+    # A live block needs a free slot for its next delivery.  The simulator may
+    # reuse a slot belonging to a removed stone, but cannot add a seventh live one.
+    if sum(s["team"] == turn for s in stones) >= 6:
+        raise ValueError(f"Team {turn} already has six live stones and cannot throw another")
+    return {"name": name, "hammer": hammer, "throw": next_throw, "end": end_no,
+            "totals": totals, "stones": sorted(stones, key=lambda s: s["slot"]),
+            "turn": turn}
+
+
+def scenario_state(scenario: Dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Convert a normalized scenario into the canonical state and condition."""
+    from csas.common import compact_m_to_raw
+
+    compact = np.full((NUM_STONES, 2), np.nan, dtype=np.float32)
+    for stone in scenario["stones"]:
+        compact[int(stone["slot"])] = [float(stone["along"]), float(stone["lateral"])]
+    state = (compact_m_to_raw(compact).reshape(-1) / POS_MAX).astype(np.float32)
+    first_team = "B" if scenario["hammer"] == "A" else "A"
+    parity = (int(scenario["throw"]) - 1) % 2
+    turn = first_team if parity == 0 else scenario["hammer"]
+    cond = np.asarray([
+        (int(scenario["throw"]) - 1) / float(SHOTS_IN_END - 1),
+        float(parity),
+        0.0 if turn == "A" else 1.0,
+    ], dtype=np.float32)
+    return state, cond
 
 
 def throw_trajectory(state_norm: np.ndarray, cond: np.ndarray, action: np.ndarray,
@@ -207,7 +313,8 @@ class Match:
     @classmethod
     def create(cls, players: Dict[str, str], ends: int = 8, noise: bool = True, mode: Optional[str] = None,
                first_hammer: str = "random", seed: Optional[int] = None,
-               labels: Optional[Dict[str, str]] = None) -> "Match":
+               labels: Optional[Dict[str, str]] = None,
+               noise_scales: Optional[List[float]] = None) -> "Match":
         mid = uuid.uuid4().hex[:12]
         seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "little")
         rng = np.random.default_rng(seed)
@@ -216,6 +323,7 @@ class Match:
             "id": mid, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "players": {"A": players.get("A", "human"), "B": players.get("B", "champion")},
             "labels": labels or {}, "ends_scheduled": int(ends), "noise": bool(noise),
+            "noise_scales": normalize_noise_scales(noise_scales),
             "seed": seed, "status": "in_progress", "mp_mode": mode, "winner": None,
             "totals": {"A": 0, "B": 0},
             "power_play_used": {"A": False, "B": False},
@@ -228,6 +336,45 @@ class Match:
         m.save()
         return m
 
+    @classmethod
+    def create_from_scenario(cls, scenario_payload: Dict[str, Any],
+                             players: Dict[str, str], ends: int = 8,
+                             noise: bool = True, seed: Optional[int] = None,
+                             labels: Optional[Dict[str, str]] = None,
+                             noise_scales: Optional[List[float]] = None) -> "Match":
+        """Create a normal playable match rooted at an arbitrary saved board."""
+        scenario = normalize_scenario(scenario_payload)
+        mid = uuid.uuid4().hex[:12]
+        seed = int(seed) if seed is not None else int.from_bytes(os.urandom(4), "little")
+        x, c = scenario_state(scenario)
+        end_no = int(scenario["end"])
+        ends = max(end_no, min(20, int(ends)))
+        first_team = "B" if scenario["hammer"] == "A" else "A"
+        cur = {
+            "mode": "sandbox", "hammer": scenario["hammer"], "first_team": first_team,
+            "state": x.tolist(), "cond": c.tolist(),
+            "throws_left": SHOTS_IN_END - int(scenario["throw"]) + 1,
+            "throws": [], "score": None,
+        }
+        data = {
+            "id": mid, "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "players": {"A": players.get("A", "human"), "B": players.get("B", "champion")},
+            "labels": labels or {}, "ends_scheduled": ends, "noise": bool(noise),
+            "noise_scales": normalize_noise_scales(noise_scales),
+            "seed": seed, "status": "in_progress", "mp_mode": "sandbox", "winner": None,
+            "totals": dict(scenario["totals"]), "end_offset": end_no - 1,
+            "power_play_used": {"A": False, "B": False},
+            "scenario": {k: scenario_payload.get(k) for k in ("id", "name")
+                         if scenario_payload.get(k) is not None},
+            "champion": {"ckpt": DEFAULT_CKPT, "n_candidates": CHAMPION_CANDIDATES,
+                         "sel_noise_samples": CHAMPION_NOISE_SAMPLES,
+                         "noise_cfg": DEFAULT_NOISE_CFG},
+            "ends": [cur],
+        }
+        m = cls(mid, data)
+        m.save()
+        return m
+
     # ------------------------------------------------------------------ #
     @property
     def cur_end(self) -> Dict[str, Any]:
@@ -235,7 +382,7 @@ class Match:
 
     @property
     def end_no(self) -> int:
-        return len(self.data["ends"])
+        return int(self.data.get("end_offset", 0)) + len(self.data["ends"])
 
     def turn_team(self) -> Optional[str]:
         if self.data["status"] != "in_progress":
@@ -254,9 +401,30 @@ class Match:
         n = getattr(self, "_noise_obj", None)
         if n is None:
             shots = sum(len(e["throws"]) for e in self.data["ends"])
-            n = make_noise(DEFAULT_NOISE_CFG, seed=self.data["seed"] * 7919 + shots)
+            n = make_noise(
+                DEFAULT_NOISE_CFG,
+                seed=self.data["seed"] * 7919 + shots,
+                scale_multipliers=np.asarray(
+                    self.data.get("noise_scales", DEFAULT_NOISE_SCALES), dtype=np.float32),
+                action_low=ARENA_ACTION_LOW,
+                action_high=ARENA_ACTION_HIGH,
+            )
             self._noise_obj = n
         return n
+
+    def set_noise(self, enabled: bool, scales: Optional[List[float]]) -> None:
+        """Update realized-throw noise and record the mid-match settings change."""
+        self.data["noise"] = bool(enabled)
+        self.data["noise_scales"] = normalize_noise_scales(scales)
+        self.__dict__.pop("_noise_obj", None)
+        self.data.setdefault("noise_changes", []).append({
+            "end": self.end_no,
+            "throw": SHOTS_IN_END - int(self.cur_end["throws_left"]) + 1,
+            "enabled": bool(enabled),
+            "scales": list(self.data["noise_scales"]),
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        })
+        self.save()
 
     # ------------------------------------------------------------------ #
     def claim_seat(self, token: str) -> Optional[str]:
@@ -279,7 +447,7 @@ class Match:
         e = self.cur_end
         if self.data["status"] != "in_progress":
             raise ValueError("match is over")
-        if e["throws"]:
+        if e["throws"] or int(e["throws_left"]) != SHOTS_IN_END or e.get("mode") == "sandbox":
             raise ValueError("power play must be chosen before the first throw of the end")
         if e["hammer"] != team:
             raise ValueError("only the team with hammer may call its power play")
@@ -304,7 +472,7 @@ class Match:
         e = self.cur_end
         x, c = self.state_c()
         hh = int(e["throws_left"])
-        intended = clip_raw(np.asarray(intended, dtype=np.float32).reshape(4))
+        intended = clip_arena_action(np.asarray(intended, dtype=np.float32).reshape(4))
         env_noise = self._env_noise()
         if env_noise is not None:
             realized = env_noise.sample_batch(intended[None], 1).reshape(4).astype(np.float32)
@@ -320,7 +488,7 @@ class Match:
         next_c = env_bridge.next_condition(c, SHOTS_IN_END)
 
         rec = {
-            "end": self.end_no, "n": len(e["throws"]) + 1, "team": team,
+            "end": self.end_no, "n": SHOTS_IN_END - hh + 1, "team": team,
             "intended": [round(float(v), 6) for v in intended],
             "realized": [round(float(v), 6) for v in realized],
             "illegal_takeout": illegal,
@@ -433,6 +601,7 @@ class Match:
         they get the chance to call it before the end's first throw."""
         e = self.cur_end
         return (self.data["status"] == "in_progress" and not e["throws"]
+                and int(e["throws_left"]) == SHOTS_IN_END and e.get("mode") != "sandbox"
                 and self.data["players"].get(e["hammer"]) != "champion"
                 and not self.data["power_play_used"][e["hammer"]]
                 and self.end_no <= self.data["ends_scheduled"])
@@ -457,13 +626,14 @@ class Match:
     # ------------------------------------------------------------------ #
     def to_dict(self, include_history: bool = True) -> Dict[str, Any]:
         d = json.loads(json.dumps(self.data))  # deep copy of plain data
+        d.setdefault("noise_scales", DEFAULT_NOISE_SCALES.tolist())
         d["seats_taken"] = sorted((d.pop("claims", None) or {}).keys())
         e = d["ends"][-1]
         d["board"] = stones_from_state(np.asarray(e["state"], dtype=np.float32))
         d["turn"] = {
             "team": self.turn_team(),
             "player": self.data["players"].get(self.turn_team()) if self.turn_team() else None,
-            "end": self.end_no, "throw": len(e["throws"]) + 1,
+            "end": self.end_no, "throw": SHOTS_IN_END - int(e["throws_left"]) + 1,
             "throws_left": e["throws_left"], "hammer": e["hammer"], "mode": e["mode"],
         }
         if not include_history:
@@ -481,14 +651,17 @@ class Match:
         la = d["labels"].get("A") or d["players"]["A"]
         lb = d["labels"].get("B") or d["players"]["B"]
         lines.append(f"MIXED DOUBLES CURLING — match {d['id']}  [{d['status']}]")
-        lines.append(f"Team A = {la}   Team B = {lb}   (execution noise: {'ON' if d['noise'] else 'OFF'})")
+        ns = d.get("noise_scales", DEFAULT_NOISE_SCALES.tolist())
+        lines.append(f"Team A = {la}   Team B = {lb}   "
+                     f"(execution noise: {'ON' if d['noise'] else 'OFF'}; "
+                     f"speed/aim/curl/offset scales={','.join(f'{float(v):g}x' for v in ns)})")
         lines.append(f"Score  A {d['totals']['A']} : {d['totals']['B']} B   "
                      f"End {self.end_no} of {d['ends_scheduled']}   Hammer (throws last): {e['hammer']}   "
                      f"Setup: {e['mode']}")
         if d["status"] == "finished":
             lines.append(f"MATCH OVER — winner: Team {d['winner']}")
             return "\n".join(lines)
-        lines.append(f"Throw {len(e['throws']) + 1} of {SHOTS_IN_END} this end — Team {team} to throw "
+        lines.append(f"Throw {SHOTS_IN_END - int(e['throws_left']) + 1} of {SHOTS_IN_END} this end — Team {team} to throw "
                      f"({e['throws_left']} throws left incl. this one).")
         if self.power_play_hold() and self.data["players"].get(team) == "champion":
             lines.append(f"WAITING: the champion throws first this end but Team {e['hammer']} "
@@ -531,9 +704,11 @@ class Match:
         lines.append('  {"side":"%s","type":"hit_roll","stone_slot":K,"target":[along,lateral]}' % team)
         lines.append('        — hit stone in slot K, then roll YOUR shooter to target')
         lines.append('  {"side":"%s","type":"params","action":[speed,angle,spin,y0]}' % team)
-        lines.append(f'        — raw physics: speed {ACTION_LOW[0]:.2f}..{ACTION_HIGH[0]:.2f} m/s, aim angle '
-                     f'{ACTION_LOW[1]:.4f}..{ACTION_HIGH[1]:.4f} rad, spin {ACTION_LOW[2]:.0f}..{ACTION_HIGH[2]:.0f} rad/s '
-                     f'(positive curls right), release lateral offset {ACTION_LOW[3]:.2f}..{ACTION_HIGH[3]:.2f} m')
+        lines.append(f'        — raw physics: speed {ARENA_ACTION_LOW[0]:.2f}..{ARENA_ACTION_HIGH[0]:.2f} m/s, aim angle '
+                     f'{ARENA_ACTION_LOW[1]:.4f}..{ARENA_ACTION_HIGH[1]:.4f} rad, spin '
+                     f'{ARENA_ACTION_LOW[2]:.1f}..{ARENA_ACTION_HIGH[2]:.1f} rad/s '
+                     f'(positive curls right), release lateral offset '
+                     f'{ARENA_ACTION_LOW[3]:.4f}..{ARENA_ACTION_HIGH[3]:.4f} m')
         lines.append('Add "preview":true to see the solved shot + predicted board WITHOUT throwing.')
         lines.append('GET /api/match/{id}/text refreshes this view after every throw.')
         return "\n".join(lines)
@@ -554,7 +729,9 @@ class Match:
 
 
 __all__ = ["Match", "Champion", "stones_from_state", "throw_trajectory",
-           "SHOTS_IN_END", "SIM_LOCK", "ACTION_LOW", "ACTION_HIGH", "ACTION_NAMES"]
+           "normalize_scenario", "scenario_state", "normalize_noise_scales",
+           "clip_arena_action", "SHOTS_IN_END", "SIM_LOCK", "ACTION_LOW", "ACTION_HIGH",
+           "ARENA_ACTION_LOW", "ARENA_ACTION_HIGH", "ACTION_NAMES", "SCENARIO_DIR"]
 
 
 # --------------------------------------------------------------------------- #

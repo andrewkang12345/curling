@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 import sys
 import time
+import json
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +50,9 @@ class NewMatch(BaseModel):
     labels: Dict[str, str] = Field(default={}, description="display names per side")
     ends: int = Field(default=8, ge=1, le=20)
     noise: bool = Field(default=True, description="realize throws under execution noise (eval protocol)")
+    noise_scales: List[float] = Field(default=[1.0, 1.0, 1.0, 1.0], min_length=4,
+                                      max_length=4,
+                                      description="speed/aim/curl/offset noise multipliers (0..5)")
     first_hammer: str = Field(default="random", description='"A" | "B" | "random"')
     seed: Optional[int] = None
     mode: Optional[str] = None
@@ -75,6 +80,37 @@ class ClaimBody(BaseModel):
     token: str = Field(min_length=6, max_length=64)
 
 
+class NoiseSettings(BaseModel):
+    enabled: bool = True
+    scales: List[float] = Field(default=[1.0, 1.0, 1.0, 1.0], min_length=4, max_length=4)
+
+
+class ScenarioStone(BaseModel):
+    team: str
+    along: float
+    lateral: float
+    slot: Optional[int] = None
+
+
+class ScenarioBody(BaseModel):
+    name: str = Field(default="Untitled position", max_length=80)
+    hammer: str = "B"
+    throw: int = Field(default=1, ge=1, le=engine.SHOTS_IN_END)
+    end: int = Field(default=1, ge=1, le=20)
+    totals: Dict[str, int] = Field(default={"A": 0, "B": 0})
+    stones: List[ScenarioStone] = Field(default=[], max_length=12)
+
+
+class ScenarioPlay(BaseModel):
+    players: Dict[str, str] = Field(default={"A": "human", "B": "champion"})
+    labels: Dict[str, str] = Field(default={"A": "You", "B": "Champion"})
+    ends: int = Field(default=8, ge=1, le=20)
+    noise: bool = True
+    noise_scales: List[float] = Field(default=[1.0, 1.0, 1.0, 1.0],
+                                      min_length=4, max_length=4)
+    seed: Optional[int] = None
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -85,13 +121,50 @@ def _match(mid: str) -> Match:
         raise HTTPException(404, f"no match {mid}")
 
 
+def _validate_players(players: Dict[str, str]) -> None:
+    for side, kind in players.items():
+        if side not in ("A", "B") or kind not in ("human", "agent", "champion"):
+            raise HTTPException(422, f"bad players entry {side}:{kind}")
+
+
+def _scenario(sid: str) -> Dict[str, Any]:
+    if not sid.isalnum() or len(sid) > 32:
+        raise HTTPException(404, f"no scenario {sid}")
+    p = engine.SCENARIO_DIR / f"{sid}.json"
+    if not p.exists():
+        raise HTTPException(404, f"no scenario {sid}")
+    return json.loads(p.read_text())
+
+
+def _save_scenario(body: ScenarioBody, sid: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        normalized = engine.normalize_scenario(body.model_dump())
+    except (TypeError, ValueError) as e:
+        raise HTTPException(422, str(e))
+    sid = sid or uuid.uuid4().hex[:12]
+    old = None
+    try:
+        old = _scenario(sid)
+    except HTTPException:
+        pass
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    out = {**normalized, "id": sid, "created": (old or {}).get("created", now),
+           "updated": now}
+    engine.SCENARIO_DIR.mkdir(exist_ok=True)
+    tmp = engine.SCENARIO_DIR / f".{sid}.tmp"
+    tmp.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
+    tmp.replace(engine.SCENARIO_DIR / f"{sid}.json")
+    return out
+
+
 def _solve_intent(m: Match, req: ShotRequest) -> tuple:
     x, c = m.state_c()
     body = req.model_dump()
     if req.type != "params" and req.type not in ("draw", "contact", "after_contact", "hit_roll"):
         raise HTTPException(422, f"unknown shot type {req.type!r}")
-    if req.type == "params" and (req.action is None or len(req.action) != 4):
-        raise HTTPException(422, "params requires action=[speed, angle, spin, y0]")
+    if req.type == "params" and (req.action is None or len(req.action) != 4 or
+                                  not np.isfinite(req.action).all()):
+        raise HTTPException(422, "params requires a finite action=[speed, angle, spin, y0]")
     needs_target = req.type in ("draw", "contact", "hit_roll") or (
         req.type == "after_contact" and not req.remove
     )
@@ -145,6 +218,31 @@ def health():
             "bank_ready": solver._BANK is not None, "time": time.time()}
 
 
+@app.get("/api/config")
+def arena_config():
+    """Client-visible physical box and execution-noise controls."""
+    return {
+        "action": {
+            "names": list(engine.ACTION_NAMES),
+            "low": engine.ARENA_ACTION_LOW.tolist(),
+            "high": engine.ARENA_ACTION_HIGH.tolist(),
+            "units": ["m/s", "rad", "rad/s", "m"],
+            "defaults": [2.50, 0.0, 7.0, 0.0],
+            "curl_calibration": {"speed_mps": 2.50, "spin_rad_s": engine.ARENA_CURL_MAX,
+                                 "lateral_curl_m": engine.FOUR_FEET_M},
+            "offset_limit_m": engine.FOUR_FEET_M,
+        },
+        "noise": {
+            "names": list(engine.ACTION_NAMES),
+            "default_scales": engine.DEFAULT_NOISE_SCALES.tolist(),
+            "scale_min": 0.0,
+            "scale_max": 5.0,
+            "base": {"speed": 0.0095, "angle": "speed-dependent 0.00116..0.00365",
+                     "spin": 2.0, "y0": 0.015},
+        },
+    }
+
+
 @app.post("/api/warmup")
 def warmup():
     t0 = time.time()
@@ -161,11 +259,59 @@ def protocol():
 
 @app.post("/api/match")
 def create_match(body: NewMatch):
-    for side, kind in body.players.items():
-        if side not in ("A", "B") or kind not in ("human", "agent", "champion"):
-            raise HTTPException(422, f"bad players entry {side}:{kind}")
+    _validate_players(body.players)
+    try:
+        scales = engine.normalize_noise_scales(body.noise_scales)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     m = Match.create(body.players, ends=body.ends, noise=body.noise, mode=body.mode,
-                     first_hammer=body.first_hammer, seed=body.seed, labels=body.labels)
+                     first_hammer=body.first_hammer, seed=body.seed, labels=body.labels,
+                     noise_scales=scales)
+    replies = m.auto_play() if "champion" in m.data["players"].values() else []
+    return {"match": m.to_dict(), "text": m.text_state(),
+            "champion_opening": replies or None}
+
+
+@app.get("/api/scenarios")
+def list_scenarios():
+    engine.SCENARIO_DIR.mkdir(exist_ok=True)
+    out = []
+    for p in sorted(engine.SCENARIO_DIR.glob("*.json"), key=lambda q: q.stat().st_mtime,
+                    reverse=True)[:50]:
+        try:
+            s = json.loads(p.read_text())
+        except Exception:
+            continue
+        out.append(s)
+    return {"scenarios": out}
+
+
+@app.post("/api/scenario")
+def create_scenario(body: ScenarioBody):
+    return {"scenario": _save_scenario(body)}
+
+
+@app.get("/api/scenario/{sid}")
+def get_scenario(sid: str):
+    return {"scenario": _scenario(sid)}
+
+
+@app.put("/api/scenario/{sid}")
+def update_scenario(sid: str, body: ScenarioBody):
+    _scenario(sid)
+    return {"scenario": _save_scenario(body, sid=sid)}
+
+
+@app.post("/api/scenario/{sid}/play")
+def play_scenario(sid: str, body: ScenarioPlay):
+    scenario = _scenario(sid)
+    _validate_players(body.players)
+    try:
+        m = Match.create_from_scenario(
+            scenario, body.players, ends=body.ends, noise=body.noise, seed=body.seed,
+            labels=body.labels, noise_scales=body.noise_scales)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     replies = m.auto_play() if "champion" in m.data["players"].values() else []
     return {"match": m.to_dict(), "text": m.text_state(),
             "champion_opening": replies or None}
@@ -198,6 +344,19 @@ def get_match(mid: str, history: bool = True):
 @app.get("/api/match/{mid}/text", response_class=PlainTextResponse)
 def get_match_text(mid: str):
     return _match(mid).text_state()
+
+
+@app.post("/api/match/{mid}/noise")
+def set_match_noise(mid: str, body: NoiseSettings):
+    m = _match(mid)
+    if m.data["status"] != "in_progress":
+        raise HTTPException(409, "match is over")
+    try:
+        m.set_noise(body.enabled, body.scales)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"match": m.to_dict(), "noise": {"enabled": m.data["noise"],
+                                               "scales": m.data["noise_scales"]}}
 
 
 @app.post("/api/match/{mid}/powerplay")

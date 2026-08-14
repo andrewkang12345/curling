@@ -11,8 +11,11 @@ const S = {
   heat: null, busy: false, replay: null, step: 0, solved: null,
   mySides: new Set(["A"]), online: false, seenThrows: 0, pollTimer: null,
   rHeatOn: false, rHeatCache: {}, pendingAdvance: null,
+  params: [2.50, 0.0, 7.0, 0.0], actionConfig: null,
+  noiseEnabled: true, noiseScales: [1, 1, 1, 1],
+  scenario: null, scenarioStones: [], scenarioTool: "A",
 };
-const APP_VERSION = "2.3.2";
+const APP_VERSION = "2.4.0";
 const PLAY_RATE = 5;          // fixed playback: sim-seconds per real-second (no normalization)
 const REPLAY_RATE = 6;
 const _tele = [];
@@ -248,11 +251,13 @@ function animateThrow(cv, result, rate = PLAY_RATE) {
 /* ---------------- view switching ---------------- */
 function show(view) {
   S.view = view;
-  for (const v of ["home", "game", "replay"]) $(`view-${v}`).classList.toggle("hidden", v !== view);
+  for (const v of ["home", "game", "sandbox", "replay"])
+    $(`view-${v}`).classList.toggle("hidden", v !== view);
   $("homeBtn").classList.toggle("hidden", view === "home");
-  $("scorechip").classList.toggle("hidden", view === "home");
+  $("scorechip").classList.toggle("hidden", view !== "game");
   if (view !== "game") stopPolling();
-  if (view === "home") loadMatches();
+  if (view === "home") { loadMatches(); loadScenarios(); }
+  if (view === "sandbox") drawSandbox();
 }
 
 /* ---------------- home ---------------- */
@@ -267,7 +272,8 @@ async function loadMatches() {
       const b = document.createElement("button");
       b.className = "matchrow";
       const la = r.labels?.A || r.players.A, lb = r.labels?.B || r.players.B;
-      const when = new Date(r.created * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const created = typeof r.created === "number" ? r.created * 1000 : r.created;
+      const when = new Date(created).toLocaleDateString(undefined, { month: "short", day: "numeric" });
       const live = r.status === "in_progress";
       b.innerHTML = `<span class="who"><span class="names">${la} vs ${lb}</span>
         <span class="sub">${when} · end ${r.end}/${r.ends_scheduled}</span></span>
@@ -278,6 +284,40 @@ async function loadMatches() {
       $("matchList").appendChild(b);
     }
   } catch (e) { $("matchList").innerHTML = `<p class="hint">${e.message}</p>`; }
+}
+
+async function loadScenarios() {
+  try {
+    const d = await api("/api/scenarios");
+    const host = $("scenarioList"); host.innerHTML = "";
+    if (!d.scenarios.length) {
+      host.innerHTML = '<p class="hint">No saved positions yet.</p>'; return;
+    }
+    for (const sc of d.scenarios.slice(0, 12)) {
+      const b = document.createElement("button"); b.className = "matchrow";
+      b.innerHTML = `<span class="who"><span class="names">${escapeHtml(sc.name)}</span>` +
+        `<span class="sub">End ${sc.end} · next throw ${sc.throw} · ${sc.stones.length} stones</span></span>` +
+        `<span class="tag">edit ▶</span>`;
+      b.onclick = () => openSandbox(sc);
+      host.appendChild(b);
+    }
+  } catch (e) { $("scenarioList").innerHTML = `<p class="hint">${e.message}</p>`; }
+}
+function escapeHtml(v) {
+  return String(v).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    "'": "&#39;", '"': "&quot;" })[c]);
+}
+
+async function loadArenaConfig() {
+  try {
+    const d = await api("/api/config");
+    S.actionConfig = d.action;
+    document.querySelectorAll(".param-range").forEach((el) => {
+      const i = +el.dataset.i; el.min = d.action.low[i]; el.max = d.action.high[i];
+    });
+    if (!S.params || S.params.length !== 4) S.params = d.action.defaults.map(Number);
+    syncParamControls();
+  } catch (e) { /* bundled limits remain usable offline */ }
 }
 
 function tabToken() {
@@ -302,8 +342,10 @@ async function newMatch(kind) {
     const players = kind === "champ" ? { A: "human", B: "champion" } : { A: "human", B: "human" };
     const labels = kind === "champ" ? { A: "You", B: "Champion" } : { A: "Red", B: "Yellow" };
     const d = await api("/api/match", { method: "POST", body: {
-      players, labels, ends: S.ends, first_hammer: "random", mode: kind } });
+      players, labels, ends: S.ends, first_hammer: "random", mode: kind,
+      noise: S.noiseEnabled, noise_scales: S.noiseScales } });
     S.match = d.match;
+    adoptNoise(d.match);
     S.online = kind === "online";
     if (kind === "online") {
       const side = await claimSeat(d.match.id);        // creator -> "A"
@@ -323,6 +365,7 @@ async function resumeMatch(mid) {
   try {
     const d = await api(`/api/match/${mid}`);
     S.match = d.match;
+    adoptNoise(d.match);
     const humans = Object.values(d.match.players).filter((p) => p === "human").length;
     S.online = humans === 2 && d.match.mp_mode === "online";
     if (S.online) {
@@ -342,12 +385,113 @@ async function joinFromLink(mid) {
     const d = await api(`/api/match/${mid}`);
     history.replaceState(null, "", "/");
     S.match = d.match; S.online = true;
+    adoptNoise(d.match);
     const side = await claimSeat(mid);
     S.mySides = new Set(side ? [side] : []);
     S.seenThrows = countThrows(d.match);
     resetShot(); show("game"); renderGame(); maybePowerPlay(); startPolling();
     toast(side ? `You are ${TEAM_NAME[side]} — good curling!` : "Both seats taken — watching live", 3600);
   } catch (e) { toast("Couldn't join: " + e.message, 4000); show("home"); }
+}
+
+function adoptNoise(match) {
+  S.noiseEnabled = match.noise !== false;
+  S.noiseScales = (match.noise_scales || [1, 1, 1, 1]).map(Number);
+  syncNoiseControls();
+}
+
+/* ---------------- sandbox scenario editor ---------------- */
+function openSandbox(sc = null) {
+  S.scenario = sc ? { ...sc } : null;
+  S.scenarioStones = (sc?.stones || []).map((x) => ({ ...x }));
+  S.scenarioTool = "A";
+  $("scenarioName").value = sc?.name || "Untitled position";
+  $("scenarioEnd").value = sc?.end || 1;
+  $("scenarioThrow").value = sc?.throw || 1;
+  $("scenarioHammer").value = sc?.hammer || "B";
+  $("scenarioScoreA").value = sc?.totals?.A || 0;
+  $("scenarioScoreB").value = sc?.totals?.B || 0;
+  $("scenarioEnds").value = Math.max(S.ends, sc?.end || 1);
+  document.querySelectorAll(".stone-tool").forEach((b) => b.classList.toggle("sel", b.dataset.tool === "A"));
+  show("sandbox"); drawSandbox();
+}
+function scenarioTurn() {
+  const hammer = $("scenarioHammer").value;
+  const first = hammer === "A" ? "B" : "A";
+  return ((Math.max(1, +$("scenarioThrow").value) - 1) % 2) ? hammer : first;
+}
+function drawSandbox() {
+  if (!$("sboard")) return;
+  drawBoard($("sboard"), S.scenarioStones, {});
+  const turn = scenarioTurn();
+  $("scenarioHint").textContent = `${TEAM_NAME[turn]} throws next · ${S.scenarioStones.length} stones placed. ` +
+    "Choose a team and tap the sheet; use Remove to erase a stone.";
+}
+function sandboxTapped(al, la) {
+  if (S.view !== "sandbox") return;
+  let nearest = null, best = 0.24;
+  for (const s of S.scenarioStones) {
+    const d = Math.hypot(s.along - al, s.lateral - la);
+    if (d < best) { best = d; nearest = s; }
+  }
+  if (S.scenarioTool === "erase") {
+    if (nearest) S.scenarioStones = S.scenarioStones.filter((s) => s.slot !== nearest.slot);
+    drawSandbox(); return;
+  }
+  if (al < -6.7056 || al > 1.974 || Math.abs(la) > 2.23) {
+    toast("Place stone centers inside the playable sheet", 2600); return;
+  }
+  if (nearest || S.scenarioStones.some((s) => Math.hypot(s.along - al, s.lateral - la) < 0.290)) {
+    toast("Stones cannot overlap", 2200); return;
+  }
+  const lo = S.scenarioTool === "A" ? 0 : 6, hi = lo + 6;
+  const used = new Set(S.scenarioStones.map((s) => s.slot));
+  const slot = Array.from({ length: 6 }, (_, i) => lo + i).find((i) => !used.has(i));
+  if (slot == null || slot >= hi) { toast(`${TEAM_NAME[S.scenarioTool]} already has six stones`); return; }
+  S.scenarioStones.push({ slot, team: S.scenarioTool,
+    along: +al.toFixed(4), lateral: +la.toFixed(4) });
+  drawSandbox();
+}
+function scenarioPayload() {
+  return {
+    name: $("scenarioName").value.trim() || "Untitled position",
+    end: Math.max(1, Math.min(20, +$("scenarioEnd").value || 1)),
+    throw: Math.max(1, Math.min(10, +$("scenarioThrow").value || 1)),
+    hammer: $("scenarioHammer").value,
+    totals: { A: Math.max(0, +$("scenarioScoreA").value || 0),
+      B: Math.max(0, +$("scenarioScoreB").value || 0) },
+    stones: S.scenarioStones,
+  };
+}
+async function saveScenario() {
+  const update = S.scenario?.id;
+  const d = await api(update ? `/api/scenario/${update}` : "/api/scenario", {
+    method: update ? "PUT" : "POST", body: scenarioPayload(),
+  });
+  S.scenario = d.scenario;
+  S.scenarioStones = d.scenario.stones.map((s) => ({ ...s }));
+  return d.scenario;
+}
+async function saveScenarioOnly() {
+  try { await saveScenario(); toast("Sandbox position saved"); drawSandbox(); }
+  catch (e) { toast(e.message, 4000); }
+}
+async function playScenario() {
+  $("scenarioPlay").disabled = true;
+  try {
+    const sc = await saveScenario();
+    const me = $("scenarioPlayAs").value, other = me === "A" ? "B" : "A";
+    const players = { [me]: "human", [other]: "champion" };
+    const labels = { [me]: "You", [other]: "Champion" };
+    const ends = Math.max(sc.end, Math.min(20, +$("scenarioEnds").value || S.ends));
+    const d = await api(`/api/scenario/${sc.id}/play`, { method: "POST", body: {
+      players, labels, ends, noise: S.noiseEnabled, noise_scales: S.noiseScales,
+    }, timeoutMs: 180000 });
+    S.match = d.match; S.online = false; S.mySides = new Set([me]);
+    S.seenThrows = countThrows(d.match); adoptNoise(d.match);
+    resetShot(); show("game"); renderGame(); maybePowerPlay();
+  } catch (e) { toast(e.message, 4500); }
+  finally { $("scenarioPlay").disabled = false; }
 }
 
 /* ---------------- game ---------------- */
@@ -362,6 +506,55 @@ function resetShot() {
   $("heatlegend").classList.add("hidden");
 }
 function curEnd() { return S.match.ends[S.match.ends.length - 1]; }
+
+function formatParam(i, v) {
+  if (i === 0) return `${v.toFixed(3)} m/s`;
+  if (i === 1) return `${v >= 0 ? "+" : ""}${v.toFixed(4)} rad`;
+  if (i === 2) return `${v >= 0 ? "+" : ""}${v.toFixed(1)} rad/s`;
+  return `${v >= 0 ? "+" : ""}${v.toFixed(3)} m`;
+}
+function syncParamControls() {
+  document.querySelectorAll(".param-range").forEach((el) => {
+    const i = +el.dataset.i;
+    el.value = S.params[i];
+    $(`paramV${i}`).textContent = formatParam(i, S.params[i]);
+  });
+}
+function setParams(action) {
+  if (!action || action.length !== 4) return;
+  S.params = action.map(Number);
+  syncParamControls();
+}
+function selectShotMode(mode) {
+  S.mode = mode;
+  document.querySelectorAll(".modechip").forEach((x) => x.classList.toggle("sel", x.dataset.m === mode));
+  $("hitopts").classList.toggle("hidden", mode !== "hit");
+}
+function syncNoiseControls() {
+  if (!$("setupNoiseOn")) return;
+  $("setupNoiseOn").checked = S.noiseEnabled;
+  $("gameNoiseOn").checked = S.noiseEnabled;
+  for (const cls of ["setup-noise", "game-noise"])
+    document.querySelectorAll(`.${cls}`).forEach((el) => {
+      const i = +el.dataset.i; el.value = S.noiseScales[i];
+      $(`${cls === "setup-noise" ? "setup" : "game"}NoiseV${i}`).textContent = `${S.noiseScales[i].toFixed(1)}×`;
+    });
+  const allOne = S.noiseScales.every((v) => Math.abs(v - 1) < 1e-6);
+  $("gameNoiseSummary").textContent = `${S.noiseEnabled ? "on" : "off"} · ${allOne ? "1× each" : S.noiseScales.map((v) => v.toFixed(1) + "×").join("/")}`;
+}
+let _noiseSaveTimer = null;
+function queueNoiseSave() {
+  syncNoiseControls();
+  if (!S.match || S.view !== "game") return;
+  clearTimeout(_noiseSaveTimer);
+  _noiseSaveTimer = setTimeout(async () => {
+    try {
+      const d = await api(`/api/match/${S.match.id}/noise`, { method: "POST",
+        body: { enabled: S.noiseEnabled, scales: S.noiseScales } });
+      S.match = d.match; toast("Execution noise updated", 1500);
+    } catch (e) { toast(e.message); }
+  }, 350);
+}
 
 function renderGame() {
   const m = S.match;
@@ -388,6 +581,8 @@ function renderGame() {
     predicted: S.solved?.preview?.predicted_board || null,
   });
   $("undoBtn").classList.toggle("hidden", S.online);
+  syncParamControls();
+  syncNoiseControls();
   updateShotUI();
   renderCoach();
 }
@@ -396,12 +591,14 @@ function updateShotUI() {
   $("shotbar").style.opacity = my ? 1 : 0.55;
   const rejectedShot = S.solved?.solver?.solvable === false;
   const ready = my && !S.busy &&
-    ((S.mode === "draw" && S.target) ||
+    ((S.mode === "params" && S.solved) || (S.mode === "draw" && S.target) ||
      (S.mode === "hit" && S.hitSlot != null && (S.hitAct === "remove" || S.tapTarget))) &&
     !rejectedShot;
   $("throwBtn").disabled = !ready;
   $("previewBtn").classList.toggle("hidden", !(S.coach && ready));
   $("hint").textContent = !my ? (S.match.status === "finished" ? "" : (S.online && S.mySides.size === 0 ? "Watching live…" : "Waiting for the other team…"))
+    : S.mode === "params" ? (S.solved ? "Parameter throw previewed — Throw when ready."
+       : "Adjust a delivery parameter; the predicted path will update.")
     : S.mode === "draw" ? (S.target ? "Target set — Throw when ready." : "Tap the ice where the stone should stop.")
     : S.hitSlot == null ? "Tap a stone on the board."
     : S.hitAct === "remove" ? "Take-out selected — Throw when ready."
@@ -413,6 +610,7 @@ function updateShotUI() {
 
 function boardTapped(al, la) {
   if (S.view !== "game" || !humanOnTurn() || S.busy) return;
+  if (S.mode === "params") return;
   _previewSeq++;                            // invalidate any solve still in flight
   if (S.mode === "draw") { S.target = [al, la]; S.solved = null; }
   else {
@@ -446,6 +644,7 @@ async function autoPreviewShot() {
     const d = await api(`/api/match/${S.match.id}/solve`, { method: "POST", body: shotBody(true) });
     if (seq !== _previewSeq) return;             // selection changed meanwhile
     S.solved = d;
+    setParams(d.intended);
     renderGame();
     if (d.solver?.solvable === false) {
       $("hint").textContent = (d.solver.solvability_reason || "That shot is not reliable.") +
@@ -453,7 +652,9 @@ async function autoPreviewShot() {
       $("throwBtn").disabled = true;
       return;
     }
-    if (S.mode === "draw") {
+    if (S.mode === "params") {
+      $("hint").textContent = "Parameter throw previewed — Throw when ready.";
+    } else if (S.mode === "draw") {
       const err = d.solver?.achieved_error_m;
       $("hint").textContent = err == null ? "Ready — Throw when ready."
         : `Stone should finish within ~${Math.round(err * 100)} cm. Throw when ready.`;
@@ -493,10 +694,26 @@ function shotBody(preview) {
   const side = S.match.turn.team;
   if (!preview && S.solved?.intended)
     return { side, type: "params", action: S.solved.intended };   // throw the previewed shot
+  if (S.mode === "params") return { side, type: "params", action: S.params, preview };
   if (S.mode === "draw") return { side, type: "draw", target: S.target, preview };
   if (S.hitAct === "remove") return { side, type: "after_contact", stone_slot: S.hitSlot, remove: true, preview };
   if (S.hitAct === "roll") return { side, type: "hit_roll", stone_slot: S.hitSlot, target: S.tapTarget, preview };
   return { side, type: "after_contact", stone_slot: S.hitSlot, target: S.tapTarget, preview };
+}
+
+let _paramPreviewTimer = null;
+function parameterChanged(i, value) {
+  _previewSeq++;
+  S.params[i] = Number(value);
+  S.solved = null;
+  S.target = null; S.hitSlot = null; S.tapTarget = null;
+  selectShotMode("params");
+  syncParamControls();
+  renderGame();
+  clearTimeout(_paramPreviewTimer);
+  _paramPreviewTimer = setTimeout(() => {
+    if (humanOnTurn() && S.mode === "params" && !S.busy) autoPreviewShot();
+  }, 220);
 }
 
 async function doThrow() {
@@ -528,6 +745,7 @@ async function doPreview() {
   try {
     const d = await api(`/api/match/${S.match.id}/solve`, { method: "POST", body: shotBody(true) });
     S.solved = d;
+    setParams(d.intended);
     const v = d.preview?.predicted_value_A;
     toast(`Solver ${d.solver?.achieved_error_m != null ? d.solver.achieved_error_m + " m off target · " : ""}` +
           (v != null ? `champion eval ${v > 0 ? "+" : ""}${v} (red persp.)` : ""), 4200);
@@ -575,7 +793,8 @@ function matchOver() {
 /* power play + champion resume */
 function ppAvailable() {
   const m = S.match, e = curEnd();
-  return m.status === "in_progress" && !(e.throws || []).length && e.hammer &&
+  return m.status === "in_progress" && e.mode !== "sandbox" && m.turn.throw === 1 &&
+    !(e.throws || []).length && e.hammer &&
     m.players[e.hammer] === "human" && S.mySides.has(e.hammer) &&
     !m.power_play_used[e.hammer];
 }
@@ -750,11 +969,19 @@ function bindCanvas(cv, handler) {
     handler(map.invAlong(ev.clientY - rect.top), map.invLat(ev.clientX - rect.left));
   });
 }
-window.addEventListener("resize", () => { if (S.view === "game") renderGame(); if (S.view === "replay") renderStep(); });
+window.addEventListener("resize", () => {
+  if (S.view === "game") renderGame();
+  if (S.view === "sandbox") drawSandbox();
+  if (S.view === "replay") renderStep();
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   bindCanvas($("board"), boardTapped);
+  bindCanvas($("sboard"), sandboxTapped);
+  loadArenaConfig();
+  syncParamControls(); syncNoiseControls();
   document.querySelectorAll(".newgame").forEach((b) => b.onclick = () => newMatch(b.dataset.kind));
+  $("sandboxBtn").onclick = () => openSandbox();
   $("joinBtn").onclick = () => {
     const code = $("joinCode").value.trim().split("/").pop();
     if (code) joinFromLink(code);
@@ -763,12 +990,21 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll(".endsel").forEach((x) => x.classList.remove("sel"));
     b.classList.add("sel"); S.ends = +b.dataset.ends;
   });
+  document.querySelectorAll(".param-range").forEach((el) =>
+    el.oninput = () => parameterChanged(+el.dataset.i, el.value));
+  $("setupNoiseOn").onchange = (e) => { S.noiseEnabled = e.target.checked; syncNoiseControls(); };
+  document.querySelectorAll(".setup-noise").forEach((el) => el.oninput = () => {
+    S.noiseScales[+el.dataset.i] = +el.value; syncNoiseControls();
+  });
+  $("gameNoiseOn").onchange = (e) => { S.noiseEnabled = e.target.checked; queueNoiseSave(); };
+  document.querySelectorAll(".game-noise").forEach((el) => el.oninput = () => {
+    S.noiseScales[+el.dataset.i] = +el.value; queueNoiseSave();
+  });
   document.querySelectorAll(".modechip").forEach((b) => b.onclick = () => {
     _previewSeq++;
-    document.querySelectorAll(".modechip").forEach((x) => x.classList.remove("sel"));
-    b.classList.add("sel"); S.mode = b.dataset.m;
-    $("hitopts").classList.toggle("hidden", S.mode !== "hit");
+    selectShotMode(b.dataset.m);
     S.target = null; S.hitSlot = null; S.tapTarget = null; S.solved = null; renderGame();
+    if (S.mode === "params" && humanOnTurn()) autoPreviewShot();
   });
   document.querySelectorAll(".hitopt").forEach((b) => b.onclick = () => {
     _previewSeq++;
@@ -792,6 +1028,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (S.view === "replay") renderStep();
   };
   $("homeBtn").onclick = () => show("home");
+  $("sandboxBack").onclick = () => show("home");
+  document.querySelectorAll(".stone-tool").forEach((b) => b.onclick = () => {
+    S.scenarioTool = b.dataset.tool;
+    document.querySelectorAll(".stone-tool").forEach((x) => x.classList.toggle("sel", x === b));
+    drawSandbox();
+  });
+  $("scenarioClear").onclick = () => { S.scenarioStones = []; drawSandbox(); };
+  $("scenarioSave").onclick = saveScenarioOnly;
+  $("scenarioPlay").onclick = playScenario;
+  for (const id of ["scenarioEnd", "scenarioThrow", "scenarioHammer", "scenarioScoreA", "scenarioScoreB"])
+    $(id).oninput = drawSandbox;
   $("heatBtn").onclick = loadHeat;
   document.querySelectorAll(".ppchoice").forEach((b) => b.onclick = () => choosePP(b.dataset.w));
   $("ppSkip").onclick = () => choosePP(null);

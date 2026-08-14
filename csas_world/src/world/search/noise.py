@@ -18,11 +18,25 @@ from ..actions import ACTION_HIGH, ACTION_LOW
 
 
 class LocalNoise:
-    def __init__(self, path: str, seed: int = 0):
+    def __init__(self, path: str, seed: int = 0,
+                 scale_multipliers: Optional[np.ndarray] = None,
+                 action_low: Optional[np.ndarray] = None,
+                 action_high: Optional[np.ndarray] = None):
         self.cfg = json.loads(Path(path).read_text())
         self.block = self.cfg.get("local", {})
         self.min_std = float(self.block.get("min_std", 1e-3))
         self.rng = np.random.default_rng(seed)
+        mult = np.ones(4, dtype=np.float32) if scale_multipliers is None \
+            else np.asarray(scale_multipliers, dtype=np.float32).reshape(4)
+        if not np.isfinite(mult).all() or np.any(mult < 0.0):
+            raise ValueError("noise scale_multipliers must be four finite non-negative values")
+        lo = ACTION_LOW if action_low is None else np.asarray(action_low, dtype=np.float32).reshape(4)
+        hi = ACTION_HIGH if action_high is None else np.asarray(action_high, dtype=np.float32).reshape(4)
+        if not np.isfinite(lo).all() or not np.isfinite(hi).all() or np.any(lo >= hi):
+            raise ValueError("noise action bounds must be finite with low < high")
+        self.scale_multipliers = mult
+        self.action_low = lo
+        self.action_high = hi
 
     def sample_batch(self, centers: np.ndarray, n: int, crn: bool = False) -> np.ndarray:
         """centers [...,4] -> [..., n, 4] noisy executions (clipped to bounds).
@@ -52,14 +66,20 @@ class LocalNoise:
                 denom = float(sr[1] - sr[0])
                 frac = np.zeros_like(spd) if denom <= 0 else (spd - sr[0]) / denom
                 scales[:, 1] = np.maximum(cr[1] + frac * (cr[0] - cr[1]), self.min_std)
+            scales *= self.scale_multipliers[None, :]
             out = flat[:, None, :] + z * scales[:, None, :]
         else:
-            out = flat[:, None, :] + self.rng.normal(0.0, std, size=(zn, int(n), 4)).astype(np.float32)
-        out = np.clip(out, ACTION_LOW[None, None, :], ACTION_HIGH[None, None, :])
+            scales = std * self.scale_multipliers
+            out = flat[:, None, :] + self.rng.normal(
+                0.0, scales, size=(zn, int(n), 4)).astype(np.float32)
+        out = np.clip(out, self.action_low[None, None, :], self.action_high[None, None, :])
         return out.reshape(*centers.shape[:-1], int(n), 4).astype(np.float32)
 
 
-def make_noise(config_path: Optional[str], seed: int = 0) -> Optional[LocalNoise]:
+def make_noise(config_path: Optional[str], seed: int = 0,
+               scale_multipliers: Optional[np.ndarray] = None,
+               action_low: Optional[np.ndarray] = None,
+               action_high: Optional[np.ndarray] = None) -> Optional[LocalNoise]:
     if not config_path:
         return None
     p = Path(config_path)
@@ -69,7 +89,8 @@ def make_noise(config_path: Optional[str], seed: int = 0) -> Optional[LocalNoise
         p = CSAS_V3_ROOT / config_path
     if not p.exists():
         return None
-    return LocalNoise(str(p), seed)
+    return LocalNoise(str(p), seed, scale_multipliers=scale_multipliers,
+                      action_low=action_low, action_high=action_high)
 
 
 __all__ = ["LocalNoise", "make_noise"]

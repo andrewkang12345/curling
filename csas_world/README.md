@@ -182,11 +182,18 @@ bash arena/run.sh 8020        # web UI at :8020, agent docs at /api/protocol
 
 - Full mixed-doubles matches: pre-placed ends, hammer rules (scoring team and
   blanked ends both pass hammer), power plays, extra ends.
-- Four shot-input modalities (`arena/AGENTS.md`): raw params, draw-to-rest,
+- Five shot-input modalities (`arena/AGENTS.md`): expanded raw-parameter sliders,
+  draw-to-rest,
   contact-point + weight, and move-hit-stone-to-target / takeout — the target
   modalities are solved by a path-bank + CEM inverse solver against the real
   board, and every solve reports its achieved error plus the champion's value
   estimate of the predicted outcome.
+- Every solved intent synchronizes the four raw sliders. Arena raw throws allow
+  ±4 ft release offset and ±31.1 rad/s spin (calibrated to 4 ft of curl at
+  button-draw weight) without reinterpreting older model checkpoints.
+- Execution noise is independently adjustable for speed, aim, curl, and release
+  offset (0–5×), and persistent sandbox scenarios can set the end, next throw,
+  hammer, score, and arbitrary non-overlapping stone positions before play.
 - Matches persist in `arena/matches/*.json` with intended vs realized actions
   and per-throw champion evals — completed matches double as analysis logs.
 - Env knobs: `ARENA_CKPT`, `ARENA_DEVICE`, `ARENA_CHAMPION_CANDIDATES`,

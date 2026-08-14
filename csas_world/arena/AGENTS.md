@@ -38,6 +38,9 @@ turn: read the state, post a shot.
 - Execution noise: by default every realized throw is a noisy sample around
   your intended shot (the same fitted noise model used in our evaluations), so
   prefer robust shots — a perfect-looking solve can still miss by a few cm.
+  At match creation, `noise_scales:[speed,aim,curl,offset]` independently scales
+  the four fitted error terms from 0× (exact) through 5×. It can be changed
+  during a match with `POST /api/match/{id}/noise`.
 - Score = sum over ends; extra ends on a tie.
 
 ## Endpoints
@@ -50,6 +53,9 @@ turn: read the state, post a shot.
 | `POST /api/match/{id}/solve` | dry-run a shot intent → solved action + predicted trajectory/board + champion eval. No state change. |
 | `POST /api/match/{id}/throw` | commit a shot (same body as solve). Response includes the realized (noisy) throw, the new board, and — if the champion is your opponent — its reply throw(s) in `replies`. |
 | `POST /api/match/{id}/undo` | roll the current end back to before your last throw (your throw + the champion's replies are discarded). Cannot cross a completed end. Every undo is recorded in the match data — competitive/eval matches should not use it. |
+| `POST /api/match/{id}/noise` | set `{"enabled":true,"scales":[speed,aim,curl,offset]}`; each scale is 0..5 and changes are logged. |
+| `GET /api/config` | physical action limits, units, curl calibration, and base noise metadata. |
+| `GET/POST /api/scenarios` / `/api/scenario` | list or save sandbox positions; see below. |
 | `GET /api/protocol` | this document |
 
 If you throw out of turn or after the match ends you get a 409 with an
@@ -78,9 +84,12 @@ explanation. The champion answers automatically inside your `/throw` call
    opponent stone is hit but kept in play. A throw with `solvable:false` is
    rejected; choose another target or shot.
 5. `{"side":"A","type":"params","action":[speed,angle,spin,y0]}`
-   — raw physics: speed 2.20–3.01 m/s, aim angle ±0.1038 rad, spin ±7 rad/s
-   (positive curls right), release lateral offset ±0.23 m. Speeds ≈2.45–2.6
-   reach the house; ≥2.75 is takeout weight.
+   — raw physics: speed 2.20–3.01 m/s, aim angle ±0.1038 rad, spin
+   ±31.1 rad/s (positive curls right), release lateral offset ±1.2192 m
+   (four feet). At button-draw weight (2.50 m/s), the maximum spin produces
+   four feet of lateral curl in the simulator. Speeds ≈2.45–2.6 reach the
+   house; ≥2.75 is takeout weight. Intent solvers remain inside the incumbent
+   model's trained box; only explicit raw params use the expanded range.
 
 Solver responses include `solver.achieved_error_m` (how close the intent was
 actually met, noiselessly) and `preview.predicted_value_A` (the champion value
@@ -107,3 +116,28 @@ done
 Matches persist server-side (`arena/matches/*.json`) — full shot history with
 intended vs realized actions, solver metadata and champion evals, so completed
 matches double as analysis logs.
+
+## Sandbox scenarios
+
+The web editor saves reusable positions in `arena/scenarios/*.json`. The API
+equivalent is:
+
+```json
+POST /api/scenario
+{
+  "name": "Two buried reds",
+  "end": 4,
+  "throw": 7,
+  "hammer": "B",
+  "totals": {"A": 2, "B": 3},
+  "stones": [
+    {"team": "A", "along": 0.0, "lateral": 0.0},
+    {"team": "B", "along": -1.2, "lateral": 0.25}
+  ]
+}
+```
+
+The response contains a scenario id. Start a match from it with
+`POST /api/scenario/{id}/play`, using the same `players`, `labels`, `ends`,
+`noise`, and `noise_scales` fields as match creation. The requested next throw,
+hammer, score, and side on turn are preserved.
