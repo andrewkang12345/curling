@@ -2675,7 +2675,7 @@ rows exist. The six failed shards were resumed one-per-GPU in two waves. Also fi
 run; the reproducible chain explicitly requests all 24 stability states. The repaired run
 passed the 96-key completeness gate and finished at 2026-08-12 20:30:49 UTC.
 
-## EXP-074 / az_v28_oppbr_meta — OPPONENT-MODEL BEST RESPONSE TO META-NASH — IN FLIGHT 2026-08-13
+## EXP-074 / az_v28_oppbr_meta — OPPONENT-MODEL BEST RESPONSE TO META-NASH — COMPLETED 2026-08-14
 
 **Question.** Before committing to PSRO, can we confidently train an approximate best
 response to the current empirical Nash mixture?  EXP-065 proved one large fixed-opponent
@@ -2724,3 +2724,67 @@ If the first training run certifies, repeat training with a second seed before t
 One mixture-sampled full end at budget 512 completed: 10/10 records, correct h10..h1,
 opponent=v26, learner targets only on its alternating plies, 1/5 learner plies passed the
 t>=2 distillation gate.  GPU peak with all three mixture members loaded was 4.3 GiB.
+
+**EXP-074 raw mixture gate (auto-appended):**
+
+- vs v26 (w=0.652): -0.0262 +/- 0.0308/end (30 cells, 2516 ends)
+- vs v19 (w=0.203): +0.1427 +/- 0.0309/end (30 cells, 2516 ends)
+- vs v14d (w=0.145): +0.0537 +/- 0.0284/end (30 cells, 2516 ends)
+- mixture: **+0.0196 +/- 0.0214/end, t=+0.92 — NOT CERTIFIED**
+- machine-readable: `eval_out/az_v28_oppbr_meta/mixture_result.json`
+
+**Verdict.** The chain completed cleanly: 480 games, 4,800 horizon-balanced records,
+120/120 valid shards, selected training checkpoint, and all 90 evaluation cells (7,548
+ends).  The response exploits v19 strongly but is slightly negative against v26, which
+owns 65.2% of the mixture; the weighted profit is therefore too small to distinguish
+from zero.  No second training seed and no promotion.  az_v25_br remains champion.
+
+**Why this does not certify equilibrium.** Only 401/2,400 learner decisions passed the
+policy-target confidence gate.  Signal collapsed by throwing-order/horizon parity:
+370/401 targets were on odd horizons, versus 31 on even horizons; h8 had zero targets
+and h10 had one.  Training selected epoch 13 after only a small held-out distillation
+improvement and then early-stopped at epoch 17.  Because the final result still
+conflates teacher quality, the 16x2 opponent approximation, and neural distillation,
+it is evidence that this response-oracle procedure is not dependable—not evidence
+that the empirical mixture has no profitable response.
+
+## EXP-075 — PAIRED v26 RESPONSE-ORACLE AUDIT — PRE-REGISTERED 2026-08-14
+
+**Question.** Does EXP-074 fail because its opponent-model tree does not choose actions
+that survive exact deployed v26 play, or because az_v28 fails to retain good teacher
+actions?  v26 is isolated because it has 65.2% meta-Nash weight and is the only support
+member against which az_v28's point estimate was negative.
+
+**Fresh states.** Play 48 new v25-v26 ends using both models' deployed 48-candidate x
+8-noise selectors and realized execution noise.  In 24 ends the learner owns the first
+throwing block and in 24 it owns the second.  Save only learner-to-move states, yielding
+exactly 24 fresh on-matchup states at each h1-h10 (240 states total).  No EXP-074 train
+or validation state is reused.
+
+**Frozen action arms.** At every state independently freeze (1) deployed v25's action,
+(2) the original EXP-074 16k `opp_vectree` action—four explicit plies, root_out_cap=64,
+16x2 selected first v26 reply, raw-policy deeper/tail opponent—and (3) deployed az_v28's
+action.  Log the tree's top-two gap/t statistic and its approximate advantage over the
+nearest root-pool action to v25 for calibration; the exact continuation result is the
+primary estimand.
+
+**Exact paired adjudication.** Force each root action, then continue with v25 for every
+learner turn and v26 for every opponent turn, both at exact deployed 48x8 selection.
+Use 16 continuation replicates/action/state.  Within each state/replicate, reset policy
+sampling, selection-noise, and execution-noise streams identically across all three
+arms (CRN).  Average replicates within state; the 240 state means—not 11,520 individual
+arm outcomes—are the sampling units.  Report h1-h10, odd/even, and h1-5/h6-10 strata.
+
+**Pre-registered primary gate and decision map.** The teacher is validated against v26
+iff paired `search - v25` mean dScore is positive at t>=2.1 across states.  Apply the
+same gate to `az_v28 - v25` as the distillation-retention readout.  If the teacher fails,
+do not recollect or weaken the significance gate: next isolate/fix search/opponent-model
+fidelity.  If the teacher certifies but az_v28 does not, repair distillation and parity
+balancing.  If both certify, proceed to a separately pre-registered high-N full-mixture
+confirmation.  Bucket results are diagnostics, not extra opportunities to pass.
+
+**Excluded smoke.** Two fresh games, h1/h2 action rows at budget 512, and two paired
+continuations passed finite/shape, perspective, exact-selector, completeness, strict
+resume, and aggregation checks.  Its two-state payoff is excluded from every EXP-075
+claim.  Full output: `eval_out/exp075_oracle_audit`; driver:
+`scripts/_exp075_oracle_audit.sh`.
