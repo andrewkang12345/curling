@@ -2796,3 +2796,57 @@ ample memory headroom.  The first 44 completed three-shard action rows were stop
 JSON-record boundaries, validated unique/complete, and repartitioned by `sid % 4` before
 resume.  State set, search seeds, actions, continuation seeds, gates, and sampling units
 are unchanged; this is scheduling only.
+
+**Paused for the missing control (2026-08-14 18:42 UTC).** At user direction EXP-076
+(the exact successful bigsel BR recipe against the mixture) runs first.  EXP-075 is
+recoverably paused with all 240 fresh states and 90/240 unique, complete 16k action rows;
+no paired-continuation evaluation had started.  All workers and the launcher were stopped,
+the lock was removed, and resume will skip those 90 rows.
+
+## EXP-076 / az_v29_bigsel_meta — EXP-065 RECIPE AGAINST META-NASH — PRE-REGISTERED 2026-08-14
+
+**Missing control.** EXP-074 changed the successful v25 BR's target operator at the same
+time it changed the opponent from fixed v14d to the meta-Nash mixture.  It therefore could
+not distinguish a harmful `opp_vectree` teacher from an intrinsically harder mixture BR.
+EXP-076 keeps the EXP-074 opponent, learner/init, corpus scale, matchup returns, training,
+and gate, but restores EXP-065's exact exploratory-bigsel teacher.
+
+**Operator.** On learner turns sample 192 v25 policy proposals at temperature 1.35 and
+std scale 1.6.  Rank every proposal with the incumbent v25 value head after 64 shared-CRN
+execution realizations; distill the soft top 24 only when the top-two gap has t>=2.  Actual
+learner play uses the top action with one realized execution draw.  Opponent turns use the
+selected mixture member's exact deployed 48-candidate x 8-noise selector and never receive
+policy targets.  All plies receive realized matchup-return value targets.  These are the
+corrected EXP-065 settings that produced az_v25_br.
+
+**Mixture/corpus.** Collect 480 full ends = 4,800 balanced records in 20 resumable shards
+of 24 games.  A member is sampled once per game from v26/v19/v14d at 65.2/20.3/14.5%.
+Before collection, seed base 760764 was chosen using opponent-label RNG only to stratify
+the realized allocation to exactly 312/96/72 games.  Shards 0/5/10/15 form the held-out
+96-game validation split with 63/19/14 members; the other 384 games train.  No outcome,
+action, state, or significance result was inspected in choosing these seeds.
+
+**Training control.** Warm-start v25.  `configs/exp_076_train.yaml` is numerically
+identical to EXP-074's training config (and the corrected successful EXP-065b config)
+except `run_name`: same 0.10 value / 0.10 sim / 0.80 matchup replay, value-from-matchup,
+guard 5.5 on held-out matchup MSE, distillation checkpoint metric, patience four, and
+20-epoch ceiling.  Thus the policy-target operator/corpus is the intended causal change.
+
+**Pre-registered gates.** Independently evaluate the selected checkpoint against v26,
+v19, and v14d at k=4, both throwing orders and h1-h10; combine component dScores with the
+fixed 65.2/20.3/14.5 weights.  Certify a profitable response iff expected dScore is
+positive at t>=2.1.  Also report the conservative independent-run payoff contrast versus
+EXP-074; call bigsel statistically better than `opp_vectree` only if that delta is positive
+at t>=2.1.  A bigsel mixture pass with an EXP-074 failure is useful recipe-level evidence,
+but the stronger operator-harm claim requires the delta gate.  If the primary gate passes,
+repeat training with a second seed before promoting the recipe to a PSRO oracle.
+
+**Decision map.** Bigsel pass / VecTree fail points to the new teacher or its distillation
+interface.  Both fail points to mixture difficulty or a bottleneck shared by both recipes.
+Both pass makes EXP-074 an underpowered near miss; compare replicated effects.  No gate is
+weakened and no extra collection is triggered after seeing the result.
+
+**Excluded smoke.** One full-budget mixture end completed in ~1 minute on GPU simulation:
+10/10 h10..h1 records, correct scorer/provenance and learner-only masking, exact deployed
+opponent, finite arrays, and 1/5 learner plies passing the t>=2 gate.  It selected v14d and
+is excluded from every corpus and claim.  Driver: `scripts/_exp076_bigsel_meta.sh`.
