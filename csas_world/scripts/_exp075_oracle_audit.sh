@@ -22,6 +22,8 @@ ENVV="WORLD_BOUNDARY_REMOVAL=1 PYTHONPATH=src:/mnt/data/curling2/csas_v3/src JAX
 OMP_NUM_THREADS=2 POLICY_BATCH_CAP=32 VALUE_EVAL_BATCH=48 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 GNN_EDGE_SCALAR_MODE=button_visible_plus_curl_arc_reach_with_outgoing \
 GNN_NODE_FEATURE_MODE=none GNN_RELEASE_NODE_MODE=three_plus_takeout_boundary GNN_EDGE_PRUNE_MODE=none"
+GPUS=(0 1 2 3)
+NSHARDS=${#GPUS[@]}
 
 say() { echo "[exp075] $* $(date -u +%FT%TZ)" | tee -a "$LOG"; }
 run() { env -u LD_LIBRARY_PATH $ENVV "$@"; }
@@ -37,12 +39,12 @@ if [[ ! -f "$OUT/states.npz" ]]; then
 fi
 say "state generation complete"
 
-say "16k action audit start (3 shards)"
+say "16k action audit start ($NSHARDS shards on GPUs ${GPUS[*]})"
 pids=()
-for shard in 0 1 2; do
-  run_gpu $((shard + 1)) timeout 43200 \
+for shard in "${!GPUS[@]}"; do
+  run_gpu "${GPUS[$shard]}" timeout 43200 \
     python3 scripts/exp075_oracle_audit.py --phase actions \
-      --num-shards 3 --shard-id "$shard" \
+      --num-shards "$NSHARDS" --shard-id "$shard" \
       > "$OUT/actions_shard${shard}.log" 2>&1 &
   pids+=("$!")
 done
@@ -54,12 +56,12 @@ for pid in "${pids[@]}"; do
 done
 say "action audit complete"
 
-say "exact 48x8 paired continuation evaluation start (3 shards)"
+say "exact 48x8 paired continuation evaluation start ($NSHARDS shards on GPUs ${GPUS[*]})"
 pids=()
-for shard in 0 1 2; do
-  run_gpu $((shard + 1)) timeout 86400 \
+for shard in "${!GPUS[@]}"; do
+  run_gpu "${GPUS[$shard]}" timeout 86400 \
     python3 scripts/exp075_oracle_audit.py --phase eval \
-      --num-shards 3 --shard-id "$shard" \
+      --num-shards "$NSHARDS" --shard-id "$shard" \
       > "$OUT/eval_shard${shard}.log" 2>&1 &
   pids+=("$!")
 done

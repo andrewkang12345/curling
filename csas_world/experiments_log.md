@@ -2788,3 +2788,11 @@ continuations passed finite/shape, perspective, exact-selector, completeness, st
 resume, and aggregation checks.  Its two-state payoff is excluded from every EXP-075
 claim.  Full output: `eval_out/exp075_oracle_audit`; driver:
 `scripts/_exp075_oracle_audit.sh`.
+
+**Operational amendment (2026-08-14 17:21 UTC; no estimand change).** At user request,
+expand the action and continuation phases from GPUs 1-3 to GPUs 0-3.  The arena remains
+resident on GPU0 (3.9/23 GiB); the audit worker adds only ~2.3 GiB, so co-residency has
+ample memory headroom.  The first 44 completed three-shard action rows were stopped at
+JSON-record boundaries, validated unique/complete, and repartitioned by `sid % 4` before
+resume.  State set, search seeds, actions, continuation seeds, gates, and sampling units
+are unchanged; this is scheduling only.
