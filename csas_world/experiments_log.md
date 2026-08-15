@@ -2872,3 +2872,15 @@ JavaScript syntax, DOM-id, curl-calibration, and regression checks passed before
 - mixture: **+0.0210 +/- 0.0183/end, t=+1.15 — NOT CERTIFIED**
 - independent bigsel - EXP-074 contrast: +0.0014 +/- 0.0281, t=+0.05
 - machine-readable: `eval_out/az_v29_bigsel_meta/mixture_result.json`
+
+## EXP-075 — RESUMED AFTER EXP-076 — 2026-08-15
+
+EXP-076 left both candidate response-oracle recipes uncertified, so resume the
+pre-registered paired v26 audit to localize whether EXP-074's 16k opponent-model
+tree actions themselves survive exact deployed play or whether distillation is the
+failure point.  Before relaunch, validate all 240 horizon-balanced states, all 90
+preserved frozen-action rows (unique, complete, finite, correctly sharded, budget
+16k), and confirm that no continuation row exists.  Resume at the next unfinished
+state in each shard (88/89/94/95) on GPUs 0-3.  State set, frozen completed actions,
+seeds, exact 48x8 continuation operator, 16 CRN replicates, state-level sampling
+unit, and t>=2.1 gates remain unchanged.
