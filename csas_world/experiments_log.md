@@ -2884,3 +2884,29 @@ preserved frozen-action rows (unique, complete, finite, correctly sharded, budge
 state in each shard (88/89/94/95) on GPUs 0-3.  State set, frozen completed actions,
 seeds, exact 48x8 continuation operator, 16 CRN replicates, state-level sampling
 unit, and t>=2.1 gates remain unchanged.
+
+**EXP-075 paired v26 oracle audit:**
+
+- completeness: 240/240 action rows; 11520/11520 paired evaluation rows
+- search_minus_v25: +0.0786 +/- 0.0419/end, t=+1.88 (240 states)
+- azv28_minus_v25: +0.0266 +/- 0.0380/end, t=+0.70 (240 states)
+- search_minus_azv28: +0.0521 +/- 0.0445/end, t=+1.17 (240 states)
+- teacher odd: +0.0010 +/- 0.0578, t=+0.02
+- teacher even: +0.1562 +/- 0.0602, t=+2.60
+- teacher early_h1_h5: +0.0583 +/- 0.0589, t=+0.99
+- teacher late_h6_h10: +0.0990 +/- 0.0599, t=+1.65
+- verdict: **TEACHER ACTION EXACT-V26 ADVANTAGE IS INCONCLUSIVE**
+- machine-readable: `eval_out/exp075_oracle_audit/result.json`
+
+**Interpretation.** The primary teacher gate is a positive near miss, not evidence
+of no teacher advantage: +0.0786/end at t=1.88 versus the fixed t>=2.1 threshold.
+The preregistered strata are diagnostic only, but the point estimate is concentrated
+on even horizons (+0.1562, t=2.60), while odd horizons are flat (+0.0010, t=0.02).
+That is the opposite of EXP-074's accepted-target allocation (370/401 targets on odd
+horizons, 31 on even).  Moreover, the tree's approximate predicted improvement has
+correlation -0.064 with the exact paired improvement.  Thus the evidence implicates
+the teacher's confidence/calibration and parity allocation: it preferentially trained
+on the stratum where exact benefit was absent.  The az_v28 point estimate retains only
++0.0266/end (t=0.70), so the distilled student is also uncertified.  This audit does
+not certify the teacher, the student, or equilibrium; it motivates repairing and
+validating the oracle confidence signal before PSRO.
