@@ -2863,3 +2863,12 @@ implementation exposes the same hook for a later training migration.  A persiste
 editor/API saves and reloads arbitrary legal non-overlapping boards plus end, next throw,
 hammer, score, and player side, then starts a normal match at that root.  Unit/API smoke,
 JavaScript syntax, DOM-id, curl-calibration, and regression checks passed before deployment.
+
+**EXP-076 raw mixture gate (auto-appended):**
+
+- vs v26 (w=0.652): +0.0254 +/- 0.0252/end (40 cells, 2516 ends)
+- vs v19 (w=0.203): +0.0143 +/- 0.0332/end (40 cells, 2516 ends)
+- vs v14d (w=0.145): +0.0107 +/- 0.0291/end (40 cells, 2516 ends)
+- mixture: **+0.0210 +/- 0.0183/end, t=+1.15 — NOT CERTIFIED**
+- independent bigsel - EXP-074 contrast: +0.0014 +/- 0.0281, t=+0.05
+- machine-readable: `eval_out/az_v29_bigsel_meta/mixture_result.json`
