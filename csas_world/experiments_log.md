@@ -2910,3 +2910,51 @@ on the stratum where exact benefit was absent.  The az_v28 point estimate retain
 +0.0266/end (t=0.70), so the distilled student is also uncertified.  This audit does
 not certify the teacher, the student, or equilibrium; it motivates repairing and
 validating the oracle confidence signal before PSRO.
+
+## EXP-077 — BASELINE-AWARE PAIRED ORACLE GATE — PRE-REGISTERED 2026-08-15
+
+**Diagnosis being repaired.** EXP-075 found that the EXP-074 tree's approximate
+predicted improvement had correlation -0.064 with exact improvement and that its
+accepted targets were concentrated on the parity with no exact teacher benefit.
+The replacement gate therefore compares the proposed tree action directly with
+the deployed v25 fallback under the actual opponent; it never uses the tree's
+top-two gap as evidence of policy improvement.
+
+**Threshold provenance.** This design is data-dependent and is not presented as
+an untouched follow-up: splitting EXP-075's 16 repetitions into an eight-repetition
+screen and disjoint eight-repetition readout showed that a permissive paired
+t>=0.5 screen enriched tree actions while retaining useful coverage.  That split
+was exploratory.  EXP-077 freezes t>=0.5 now and uses wholly fresh states, actions,
+and continuation seeds as its first confirmatory test.
+
+**Fresh operator test.** Generate 48 new deployed v25-v26 ends, balanced between
+learner throwing orders, and save 24 learner-to-move states at every h1-h10 (240
+states).  Freeze v25's deployed action and the unchanged EXP-074 16k four-ply
+opponent-model tree action at every state.  Screen `tree - v25` with eight paired
+exact continuations: v25 on later learner turns, v26 on opponent turns, both 48x8,
+with common policy-sampling, selection-noise, and execution-noise streams.  Accept
+the tree correction iff its paired mean is positive and t>=0.5; otherwise select
+the v25 fallback.  The screen is an enrichment rule, not an individual-state
+significance claim.
+
+**Balanced safe targets.** Every state yields one point target: the screened tree
+action on acceptance and v25 on rejection.  Thus training can later receive 24
+targets per horizon without inventing corrections on unsupported parities.  EXP-077
+only validates and saves these targets; it does not train on the confirmatory set.
+
+**Independent gate.** With disjoint seed namespaces separated by 19,000,000,
+evaluate the frozen tree and v25 actions
+using 16 new exact paired continuations per state.  The primary hybrid delta equals
+`tree - v25` on accepted states and exactly zero on fallback states.  Certify the
+fixed target operator iff the mean hybrid delta across all 240 state means is
+positive at t>=2.1.  Horizon/parity and raw-tree results are diagnostics only.  On
+a pass, implement this fixed screen/fallback rule in a fresh meta-mixture collection
+and train the student; on a failure, do not spend the multi-day collection budget.
+Driver: `scripts/_exp077_paired_gate.sh`; output: `eval_out/exp077_paired_gate`.
+
+**Excluded smoke.** A fresh two-game state build followed by one h1 state at tree
+budget 512, two paired screen draws, and two disjoint readout draws passed action
+freezing, fallback selection, point-target serialization, strict JSON, aggregation,
+and idempotent resume checks.  The screen correctly rejected its zero-delta action;
+the fallback hybrid readout was exactly zero.  This smoke state and payoff are
+excluded from every EXP-077 claim (`eval_out/exp077_paired_gate_smoke`).
