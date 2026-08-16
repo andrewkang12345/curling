@@ -173,6 +173,14 @@ class SearchCfg:
     opponent_model_deploy_depth: int = 1 # exact selector through this tree depth; raw policy deeper
     opponent_model_candidates: int = 16 # affordable approximation to deployed 48-candidate selector
     opponent_model_noise_samples: int = 2 # executions used to rank each modeled candidate
+    # EXP-078 baseline-aware exact screen for opponent-model tree corrections.
+    # The tree action is used only when paired exact continuations beat the
+    # deployed incumbent fallback; otherwise the incumbent action is targeted.
+    paired_gate_repeats: int = 8
+    paired_gate_t: float = 0.5
+    paired_gate_candidates: int = 48
+    paired_gate_noise_samples: int = 8
+    paired_gate_seed_salt: int = 1_077_000
     # EXP-063 "bigsel" scorer (big-budget self-distillation teacher, EXP-062 T2):
     bigsel_candidates: int = 192     # policy proposals (deployed-selection family)
     bigsel_k: int = 64               # noise realizations per candidate (CRN)

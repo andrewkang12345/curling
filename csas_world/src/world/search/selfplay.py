@@ -28,6 +28,8 @@ play (evolving each iteration), not on a frozen human-data root pool.
 from __future__ import annotations
 
 import argparse
+import math
+from contextlib import contextmanager
 from typing import Dict, List
 
 import numpy as np
@@ -40,9 +42,138 @@ from ..replay.schema import SOURCE_MCTS
 from .collect import _live_np, _two_step_rewards
 
 
+def _reset_paired_rng(seed: int):
+    """Reset global policy-sampling RNGs for one CRN continuation arm."""
+    import torch
+
+    np.random.seed(int(seed) % (2**32 - 1))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(seed))
+
+
+def _reset_noise_rng(noise, seed: int):
+    if noise is not None:
+        noise.rng = np.random.default_rng(int(seed))
+
+
+@contextmanager
+def _preserve_global_rng():
+    """Keep paired screening from perturbing the outer self-play RNG stream."""
+    import torch
+
+    np_state = np.random.get_state()
+    torch_state = torch.random.get_rng_state()
+    cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    try:
+        yield
+    finally:
+        np.random.set_state(np_state)
+        torch.random.set_rng_state(torch_state)
+        if cuda_states is not None:
+            torch.cuda.set_rng_state_all(cuda_states)
+
+
+def _paired_gate_stats(deltas, threshold: float):
+    """Return (accepted, mean, SE, t) for the EXP-077 paired screen."""
+    a = np.asarray(deltas, dtype=np.float64)
+    if len(a) < 2:
+        raise ValueError("paired gate requires at least two continuation repeats")
+    mean = float(a.mean())
+    se = float(a.std(ddof=1) / math.sqrt(len(a)))
+    if np.isfinite(se) and se > 0:
+        t_stat = mean / se
+    elif mean > 0:
+        t_stat = float("inf")
+    elif mean < 0:
+        t_stat = float("-inf")
+    else:
+        t_stat = 0.0
+    accepted = bool(mean > 0 and t_stat >= float(threshold))
+    return accepted, mean, se, t_stat
+
+
+def _forced_exact_matchup_score(state, cond, horizon, shots_in_end, learner_block,
+                                action, crn_seed, baseline, opponent, env_noise):
+    """Force one root action, then continue deployed baseline vs opponent at 48x8."""
+    _reset_paired_rng(crn_seed)
+    _reset_noise_rng(baseline.noise, crn_seed + 11)
+    _reset_noise_rng(opponent.noise, crn_seed + 13)
+    _reset_noise_rng(env_noise, crn_seed + 17)
+
+    st = np.asarray(state, np.float32).copy()
+    cc = np.asarray(cond, np.float32).copy()
+    hh = int(horizon)
+    intended = np.asarray(action, np.float32)
+    realized = env_noise.sample_batch(intended[None], 1).reshape(4).astype(np.float32)
+    post, illegal = env_bridge.apply_legality(
+        st, env_bridge.simulate_one(st, cc, realized)[None], hh, cc)
+    st = post[0]
+    cc = env_bridge.next_condition(cc, int(shots_in_end))
+    hh -= 1
+    while hh >= 1:
+        block = int(round(float(cc[2])))
+        player = baseline if block == int(learner_block) else opponent
+        intended = np.asarray(
+            player.select_intended(st, cc, hh, int(shots_in_end), block), np.float32)
+        realized = env_noise.sample_batch(intended[None], 1).reshape(4).astype(np.float32)
+        post, _ill = env_bridge.apply_legality(
+            st, env_bridge.simulate_one(st, cc, realized)[None], hh, cc)
+        st = post[0]
+        cc = env_bridge.next_condition(cc, int(shots_in_end))
+        hh -= 1
+    return (float(env_bridge.score_end(st, int(learner_block))),
+            bool(np.asarray(illegal).any()))
+
+
+def _paired_screen_action(state, cond, horizon, shots_in_end, learner_block,
+                          search_action, baseline, opponent, opponent_gate_noise,
+                          gate_env_noise, repeats: int, threshold: float, seed: int):
+    """Apply the independently certified EXP-077 screen/fallback operator."""
+    if baseline is None or opponent is None or opponent_gate_noise is None or gate_env_noise is None:
+        raise ValueError("paired screen requires baseline, opponent, and isolated gate noises")
+    actual_opponent_noise = opponent.noise
+    with _preserve_global_rng():
+        try:
+            opponent.noise = opponent_gate_noise
+            _reset_paired_rng(seed + 500_003)
+            _reset_noise_rng(baseline.noise, seed + 500_014)
+            baseline_action = np.asarray(
+                baseline.select_intended(state, cond, int(horizon), int(shots_in_end),
+                                         int(learner_block)), np.float32)
+            scores = {"v25": [], "search": []}
+            illegal = {"v25": 0, "search": 0}
+            actions = {"v25": baseline_action, "search": np.asarray(search_action, np.float32)}
+            for rep in range(int(repeats)):
+                crn_seed = int(seed) + rep * 97
+                for arm in ("v25", "search"):
+                    score, ill = _forced_exact_matchup_score(
+                        state, cond, horizon, shots_in_end, learner_block, actions[arm],
+                        crn_seed, baseline, opponent, gate_env_noise)
+                    scores[arm].append(score)
+                    illegal[arm] += int(ill)
+        finally:
+            opponent.noise = actual_opponent_noise
+
+    deltas = np.asarray(scores["search"]) - np.asarray(scores["v25"])
+    accepted, mean, se, t_stat = _paired_gate_stats(deltas, threshold)
+    selected = np.asarray(search_action if accepted else baseline_action, np.float32)
+    diagnostics = {
+        "accepted": accepted,
+        "mean_delta": mean,
+        "se_delta": se,
+        "t": t_stat,
+        "v25_root_illegal_draws": illegal["v25"],
+        "search_root_illegal_draws": illegal["search"],
+    }
+    return selected, diagnostics
+
+
 def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
               cfg, M, rng, device, noise, scorer="tree", diag=None,
-              opponent=None, opponent_block=None):
+              opponent=None, opponent_block=None, baseline=None,
+              paired_gate_env_noise=None, paired_gate_opponent_noise=None,
+              paired_gate_seed_base=None):
     """Play one full end from `root` with search-at-every-ply. Returns the trajectory
     (states/conds/persps incl. terminal), executed actions, per-ply distillation
     targets, and the final margin in block-0 perspective.
@@ -130,7 +261,7 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 lp = legal[:n_pol]
                 if legal.any() and lp.any():
                     diag.append((int(hh), float(q[legal].max() - q[:n_pol][lp].max())))
-        elif scorer in ("vectree", "opp_vectree"):
+        elif scorer in ("vectree", "opp_vectree", "opp_vectree_paired"):
             # EXP-069: distillation targets from the VECTORISED 4-ply tree (EXP-068's
             # certified operator: monotone regret, beats flat width at >=16k on game
             # value). Terminal/rollout leaves only — no value head inside the tree.
@@ -143,8 +274,9 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
             from .collect import _mc_rollout_terminal_batch
             from .vec_tree import VecTree
 
-            if scorer == "opp_vectree" and opponent is None:
-                raise ValueError("opp_vectree requires --opponent-world or --opponent-mixture")
+            opponent_scorer = scorer in ("opp_vectree", "opp_vectree_paired")
+            if opponent_scorer and opponent is None:
+                raise ValueError(f"{scorer} requires --opponent-world or --opponent-mixture")
 
             def _sb(states, cond2, n):
                 cb = np.broadcast_to(np.asarray(cond2, np.float32), (len(states), 3)).astype(np.float32)
@@ -167,9 +299,9 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                                                   int(persp2), device, rng, noise,
                                                   cfg.rollout_temp, cfg.std_scale,
                                                   opponent_action_batch_fn=(
-                                                      _opp_tail if scorer == "opp_vectree" else None),
+                                                      _opp_tail if opponent_scorer else None),
                                                   opponent_block=(
-                                                      int(opponent_block) if scorer == "opp_vectree" else None))
+                                                      int(opponent_block) if opponent_scorer else None))
 
             def _ob(states, cond2, h2, depth2, n):
                 cb = np.broadcast_to(np.asarray(cond2, np.float32),
@@ -199,8 +331,8 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                            out_cap=int(getattr(cfg, "vectree_out_cap", 8)),
                            root_out_cap=int(getattr(cfg, "vectree_root_out_cap", 0)),
                            inner_pool=int(getattr(cfg, "vectree_inner_pool", 8)),
-                           opponent_batch_fn=(_ob if scorer == "opp_vectree" else None),
-                           opponent_block=(int(opponent_block) if scorer == "opp_vectree" else None),
+                           opponent_batch_fn=(_ob if opponent_scorer else None),
+                           opponent_block=(int(opponent_block) if opponent_scorer else None),
                            opponent_samples=int(getattr(cfg, "opponent_model_actions", 1)))
             tree.run([int(getattr(cfg, "vectree_budget", 16000))])
             acts, q, se, n_vis = tree.root_stats()
@@ -208,6 +340,38 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 return None
             order = np.argsort(q)[::-1]
             top_idx, weights = env_bridge.soft_topk(q, min(M, len(q)), cfg.policy_temperature)
+            if scorer == "opp_vectree_paired":
+                if paired_gate_seed_base is None:
+                    raise ValueError("opp_vectree_paired requires a paired gate seed")
+                search_action = np.asarray(acts[int(order[0])], np.float32)
+                state_seed = (int(paired_gate_seed_base)
+                              + (int(root.horizon) - int(hh)) * 10_007)
+                selected, gate_diag = _paired_screen_action(
+                    st, cc, hh, sie, int(round(cc[2])), search_action,
+                    baseline, opponent, paired_gate_opponent_noise,
+                    paired_gate_env_noise,
+                    repeats=int(getattr(cfg, "paired_gate_repeats", 8)),
+                    threshold=float(getattr(cfg, "paired_gate_t", 0.5)),
+                    seed=state_seed)
+                if diag is not None:
+                    diag.append({"horizon": int(hh), **gate_diag})
+                # EXP-077 validates only the selected root action.  Use a point
+                # target rather than teaching unvalidated alternatives from the
+                # tree's soft top-k.  Rejections explicitly anchor to v25.
+                dists.append((selected[None].copy(), np.array([1.0], np.float32), 1.0))
+                a = selected
+                if noise is not None:
+                    a = noise.sample_batch(a[None], 1).reshape(4).astype(np.float32)
+                post, _ = env_bridge.apply_legality(
+                    st, env_bridge.simulate_one(st, cc, a)[None], hh, cc)
+                acts_exec.append(a.copy())
+                st = post[0]
+                cc = env_bridge.next_condition(cc, sie)
+                hh -= 1
+                states.append(st.copy())
+                conds.append(cc.copy())
+                persps.append(int(round(cc[2])))
+                continue
             conf = 1.0
             sig_t = float(getattr(cfg, "dist_sig_t", 0.0) or 0.0)
             if sig_t > 0.0 and len(q) >= 2:
@@ -537,6 +701,9 @@ def main():
                      help="EXP-065: fixed-opponent ckpt (deployed 48x8 selection) playing one block per game; learner plies get targets, values become matchup returns")
     opp.add_argument("--opponent-mixture", default=None,
                      help="JSON manifest of {members:[{name, checkpoint, weight}]} sampled once per game")
+    ap.add_argument("--baseline-world", default=None,
+                    help="EXP-078 deployed incumbent used by opp_vectree_paired for exact "
+                         "screening, continuation, and safe fallback")
     ap.add_argument("--value-world", default=None,
                     help="WorldModel ckpt: its value head evaluates tree leaves "
                          "(closes the V-improves-search loop). Overrides --value.")
@@ -546,7 +713,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-shards", type=int, default=1)
     ap.add_argument("--shard-id", type=int, default=0)
-    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree", "opp_vectree"], default="tree",
+    ap.add_argument("--scorer", choices=["tree", "terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree", "opp_vectree", "opp_vectree_paired"], default="tree",
                     help="tree = 2-ply KR-UCT with value-head leaves (az_v9); "
                          "terminal = value-free dense-candidate MC-to-terminal operator (az_v10); "
                          "tree_terminal = dense-root KR-UCT to mcts_max_depth + terminal-rollout leaves (az_v11); "
@@ -606,6 +773,7 @@ def main():
 
     opponent = None
     opponents = []
+    opponent_gate_noises = []
     opponent_weights = None
     opponent_names = []
     if args.opponent_world:
@@ -614,6 +782,7 @@ def main():
                                noise=make_noise(cfg.search.noise_config, args.seed + 977),
                                sel_noise_samples=8)
         opponents = [opponent]
+        opponent_gate_noises = [make_noise(cfg.search.noise_config, args.seed + 1_977)]
         opponent_weights = np.array([1.0], dtype=np.float64)
         opponent_names = ["fixed_opponent"]
         print(f"[selfplay] BR mode: fixed opponent = {args.opponent_world} (deployed 48x8)", flush=True)
@@ -645,25 +814,56 @@ def main():
                 str(ckpt), device, name=name,
                 noise=make_noise(cfg.search.noise_config, args.seed + 977 + 1009 * j),
                 sel_noise_samples=int(spec.get("selection_noise_samples", 8))))
+            opponent_gate_noises.append(make_noise(
+                cfg.search.noise_config, args.seed + 1_977 + 1009 * j))
             opponent_names.append(name)
         print("[selfplay] BR mixture: " + ", ".join(
             f"{n}={w:.3%}" for n, w in zip(opponent_names, opponent_weights)), flush=True)
 
+    baseline = None
+    paired_gate_env_noise = None
+    if args.scorer == "opp_vectree_paired":
+        if not args.baseline_world:
+            raise ValueError("opp_vectree_paired requires --baseline-world")
+        if not opponents:
+            raise ValueError("opp_vectree_paired requires an opponent")
+        from ..eval.head_to_head import WorldPlayer
+
+        baseline = WorldPlayer(
+            args.baseline_world, device,
+            n_candidates=int(getattr(cfg.search, "paired_gate_candidates", 48)),
+            name="paired_gate_v25",
+            noise=make_noise(cfg.search.noise_config, args.seed + 2_977),
+            sel_noise_samples=int(getattr(cfg.search, "paired_gate_noise_samples", 8)))
+        paired_gate_env_noise = make_noise(cfg.search.noise_config, args.seed + 3_977)
+        print(f"[selfplay] paired exact gate: baseline={args.baseline_world}, "
+              f"repeats={int(getattr(cfg.search, 'paired_gate_repeats', 8))}, "
+              f"t>={float(getattr(cfg.search, 'paired_gate_t', 0.5)):.2f}, "
+              f"fallback=v25 point target", flush=True)
+
     recs: List[Dict[str, np.ndarray]] = []
-    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree", "opp_vectree") else None
+    diag: List = [] if args.scorer in ("terminal", "tree_terminal", "screen_tree", "stt", "bigsel", "vectree", "opp_vectree", "opp_vectree_paired") else None
     n_games = 0
     opponent_counts = {name: 0 for name in opponent_names}
     opponent_rng = np.random.default_rng(args.seed + 104729)
     for i, root in enumerate(roots):
+        opponent_gate_noise = None
         if opponents:
             oi = int(opponent_rng.choice(len(opponents), p=opponent_weights))
             opponent = opponents[oi]
+            opponent_gate_noise = opponent_gate_noises[oi]
             opponent_counts[opponent_names[oi]] += 1
         g = play_game(root, policy, amean_t, astd_t, amean_np, astd_np,
                       value_model, cfg.search, M, rng, device, noise,
                       scorer=args.scorer, diag=diag,
                       opponent=opponent,
-                      opponent_block=(i % 2) if opponent is not None else None)
+                      opponent_block=(i % 2) if opponent is not None else None,
+                      baseline=baseline,
+                      paired_gate_env_noise=paired_gate_env_noise,
+                      paired_gate_opponent_noise=opponent_gate_noise,
+                      paired_gate_seed_base=(
+                          int(getattr(cfg.search, "paired_gate_seed_salt", 1_077_000))
+                          + int(args.seed) * 1_000_003 + i * 100_003))
         if g is None:
             continue
         states, conds, persps, acts_exec, dists, m0 = g
@@ -690,6 +890,7 @@ def main():
         num_shards=int(args.num_shards), shard_id=int(args.shard_id), split=args.split,
         policy_ckpt=args.policy, policy_mtime=_os.path.getmtime(args.policy),
         value_world=args.value_world,
+        baseline_world=args.baseline_world,
         config=args.config,
         opponent_world=args.opponent_world,
         opponent_mixture=args.opponent_mixture,
@@ -710,14 +911,60 @@ def main():
                     opponent_model_deploy_depth=int(getattr(s, "opponent_model_deploy_depth", 1)),
                     opponent_model_candidates=int(getattr(s, "opponent_model_candidates", 16)),
                     opponent_model_noise_samples=int(getattr(s, "opponent_model_noise_samples", 2)),
-                    opponent_tail="raw_policy" if args.scorer == "opp_vectree" else None,
+                    opponent_tail=("raw_policy" if args.scorer in
+                                   ("opp_vectree", "opp_vectree_paired") else None),
+                    paired_gate_repeats=int(getattr(s, "paired_gate_repeats", 8)),
+                    paired_gate_t=float(getattr(s, "paired_gate_t", 0.5)),
+                    paired_gate_candidates=int(getattr(s, "paired_gate_candidates", 48)),
+                    paired_gate_noise_samples=int(getattr(s, "paired_gate_noise_samples", 8)),
+                    paired_gate_seed_salt=int(getattr(s, "paired_gate_seed_salt", 1_077_000)),
                     rollout_temp=s.rollout_temp, soft_topk=s.soft_topk,
                     policy_temperature=s.policy_temperature),
     )
+    if args.scorer == "opp_vectree_paired":
+        paired_entries = [entry for entry in (diag or []) if isinstance(entry, dict)]
+        manifest["paired_gate"] = {
+            "evaluated": len(paired_entries),
+            "accepted": sum(bool(entry["accepted"]) for entry in paired_entries),
+            "fallback": sum(not bool(entry["accepted"]) for entry in paired_entries),
+            "target_semantics": "point tree action if accepted, else point deployed-v25 action",
+            "continuation": "deployed v25 learner vs selected deployed opponent, both 48x8",
+        }
     with open(args.out.replace(".npz", ".manifest.json"), "w") as fh:
         _json.dump(manifest, fh, indent=2)
     if diag is not None:
         import json
+        if args.scorer == "opp_vectree_paired":
+            by_h = {}
+            for entry in diag:
+                if not isinstance(entry, dict):
+                    raise RuntimeError("paired gate diagnostics must be dictionaries")
+                by_h.setdefault(int(entry["horizon"]), []).append(entry)
+            summary = {}
+            for h, entries in sorted(by_h.items()):
+                t_values = np.asarray([float(e["t"]) for e in entries], np.float64)
+                finite_t = t_values[np.isfinite(t_values)]
+                summary[f"h{h:02d}"] = {
+                    "n": len(entries),
+                    "accepted": sum(bool(e["accepted"]) for e in entries),
+                    "accept_rate": float(np.mean([bool(e["accepted"]) for e in entries])),
+                    "mean_gate_delta": float(np.mean([float(e["mean_delta"]) for e in entries])),
+                    "mean_gate_t_finite": (float(finite_t.mean()) if len(finite_t) else None),
+                    "v25_root_illegal_draws": sum(int(e["v25_root_illegal_draws"])
+                                                  for e in entries),
+                    "search_root_illegal_draws": sum(int(e["search_root_illegal_draws"])
+                                                     for e in entries),
+                }
+            summary["all"] = {
+                "n": len(diag),
+                "accepted": sum(bool(e["accepted"]) for e in diag),
+                "fallback": sum(not bool(e["accepted"]) for e in diag),
+            }
+            with open(args.out.replace(".npz", ".diag.json"), "w") as fh:
+                json.dump(summary, fh, indent=2, allow_nan=False)
+            print(f"[selfplay] paired-gate diagnostics -> "
+                  f"{args.out.replace('.npz', '.diag.json')}", flush=True)
+            return
         by_h, by_h_wp = {}, {}
         for entry in diag:
             h, m = entry[0], entry[1]

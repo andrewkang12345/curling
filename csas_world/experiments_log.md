@@ -2981,3 +2981,61 @@ all ten horizons equal target coverage.  Raw search also passed on this fresh se
 EXP-077 validates the teacher gate against v26; it does not yet certify a neural
 student or a response to the full mixture.  The preregistered next step is therefore
 fresh paired-gated mixture collection, student training, and full mixture evaluation.
+
+## EXP-078 / az_v30_paired_meta — PAIRED-GATED BR(mu_070) — PRE-REGISTERED 2026-08-16
+
+**Question.** Can the independently certified EXP-077 target operator be distilled
+into a profitable neural response to the complete empirical meta-Nash mixture?
+EXP-078 is the authorized full collection/training run.  Its candidate is
+`az_v30_paired_meta`, warm-started from champion `az_v25_br`.
+
+**Teacher and safe fallback.** At every learner state run the unchanged EXP-074
+16k four-ply opponent-model VecTree.  Independently select deployed v25's action,
+then compare the frozen tree and v25 actions with the certified EXP-077 screen:
+eight exact paired CRN continuations, deployed v25 on later learner turns and the
+selected deployed support member on opponent turns, both at 48 candidates x 8
+selection-noise draws.  Use the tree action iff paired mean `tree - v25` is positive
+at t>=0.5; otherwise use v25.  The selected action is both executed and saved as a
+one-action point target.  The old tree top-two confidence is unused.  Gate RNG and
+opponent noise are isolated from the outer self-play stream.
+
+**Mixture and corpus.** Collect 480 fresh complete ends in 120 atomic four-game
+shards with exact v26/v19/v14d allocation 312/96/72 (65.2/20.3/14.5%).  Four games
+per shard balance learner throwing order; 78/24/18 shards are assigned to the
+three members by a frozen multiplicative permutation.  The member-specific teacher
+knows the member sampled for that end, as in EXP-074, but member identity is not an
+input to the student.  Every learner state receives either a screened correction or
+the v25 anchor and every opponent state remains policy-masked: exactly 2,400 policy
+targets, 240 at each h1-h10, plus 4,800 realized matchup-return value records.
+Shards divisible by five are held out, producing 384 train / 96 validation games
+with validation member counts 64/20/12.  No EXP-075/077 confirmation state is reused.
+
+**Training control.** Fine-tune v25 with the numerically unchanged guarded
+EXP-074/076 training recipe: 0.10 value / 0.10 simulator / 0.80 matchup replay,
+value-from-realized-matchup, held-out policy-distillation checkpoint selection,
+matchup-value MSE guard 5.50, patience four, and 20-epoch ceiling.  Thus the policy
+labels (paired correction or v25 fallback) are the substantive training change.
+
+**Evaluation and gates.** Evaluate the selected checkpoint independently against
+v26, v19, and v14d at k=4 over both throwing orders and h1-h10, then weight component
+scores by the frozen 65.2/20.3/14.5 mixture.  Certify a profitable response iff
+expected dScore is positive at t>=2.1.  Report conservative independent contrasts
+against EXP-074 and EXP-076 as diagnostics, not extra pass opportunities.  A fail
+does not weaken the gate or promote the model.  A pass licenses a second training
+seed before treating the paired-gated recipe as a dependable PSRO oracle; az_v25_br
+remains champion during this run.
+
+**Execution.** Use all four GPUs with eight concurrent resumable collection workers
+(two/GPU); the arena remains resident on GPU0.  Three parallel one-end, full-budget
+support-member pilots are excluded from training and every claim.  Driver:
+`scripts/_exp078_paired_meta.sh`; replay: `artifacts/replay/mcts/az_v30_paired_meta`;
+evaluation: `eval_out/az_v30_paired_meta`.
+
+**Excluded reduced smoke.** Two independently launched one-game v26 runs with
+identical seed, tree budget 512, and two screen repetitions produced bit-identical
+replay tensors.  Each contained ten horizon-balanced records, exactly five
+learner-only unit-mass point targets, complete gate/fallback provenance, strict
+JSON diagnostics, and no RNG leakage into outer self-play.  All five reduced-budget
+tree actions were rejected and correctly became v25 fallback targets.  These ends
+are excluded (`artifacts/replay/mcts/az_v30_paired_meta_smoke`); the launcher's
+separate three-member pilots use the full preregistered 16k x eight-repeat operator.

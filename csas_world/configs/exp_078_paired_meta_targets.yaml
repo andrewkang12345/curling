@@ -1,0 +1,65 @@
+# EXP-078: paired-gated best-response targets against the EXP-070 empirical
+# meta-Nash mixture.  The 16k four-ply opponent-model tree is unchanged from
+# EXP-074.  Its chosen action is screened directly against deployed v25 using
+# the independently certified EXP-077 operator: eight exact paired continuations
+# against the selected support member, accept iff mean delta > 0 and t >= 0.5,
+# otherwise fall back to v25.  Every learner state receives the selected point
+# target; opponent states remain policy-masked.  Realized matchup returns train V.
+model:
+  use_value: true
+  use_policy: true
+  use_dynamics: true
+  use_consistency: true
+  consistency_mode: simsiam
+  use_outcome: false
+  use_decoder: false
+  use_step_reward: true
+loss:
+  policy_bc: 0.0
+  policy_distill: 1.0
+  value: 1.5
+  value_nll: 0.2
+  value_from_mcts: false
+  consistency: 1.0
+  outcome: 0.0
+  step_reward: 0.5
+replay:
+  unroll_steps: 5
+  mix_human: 0.0
+  mix_value: 0.30
+  mix_sim: 0.10
+  mix_mcts: 0.60
+  value_use_synthetic: true
+search:
+  vectree_budget: 16000
+  vectree_depth: 4
+  vectree_out_cap: 8
+  vectree_root_out_cap: 64
+  vectree_inner_pool: 8
+  opponent_model_actions: 1
+  opponent_model_deploy_depth: 1
+  opponent_model_candidates: 16
+  opponent_model_noise_samples: 2
+  paired_gate_repeats: 8
+  paired_gate_t: 0.5
+  paired_gate_candidates: 48
+  paired_gate_noise_samples: 8
+  paired_gate_seed_salt: 1077000
+  noise_config: configs/noise/v2_fullsheet.json
+  policy_candidates: 24
+  structured_candidates: 8
+  diverse_candidates: 8
+  local_candidates: 4
+  global_candidates: 4
+  soft_topk: 24
+  noise_samples: 8
+  rollout_temp: 0.6
+  rollout_greedy_steps: 5
+  use_mcts_tree: false
+  terminal_rollout_scoring: true
+  dist_sig_t: 0.0
+horizon:
+  start_horizon: 1
+  max_horizon: 10
+  include_preplaced: true
+  noisy_h2h: true
