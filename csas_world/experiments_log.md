@@ -2958,3 +2958,26 @@ freezing, fallback selection, point-target serialization, strict JSON, aggregati
 and idempotent resume checks.  The screen correctly rejected its zero-delta action;
 the fallback hybrid readout was exactly zero.  This smoke state and payoff are
 excluded from every EXP-077 claim (`eval_out/exp077_paired_gate_smoke`).
+
+**EXP-077 independent paired-gate audit:**
+
+- completeness: 240/240 actions; 240/240 gates; 240/240 readouts
+- accepted tree corrections: 91/240; fallback v25 anchors: 149/240
+- independent hybrid - v25: +0.1323 +/- 0.0289/end, t=+4.57
+- independent raw search - v25: +0.1013 +/- 0.0431/end, t=+2.35
+- gate: **CERTIFIED**
+- decision: **PROCEED TO FULL PAIRED-GATED MIXTURE COLLECTION/TRAINING**
+- machine-readable: `eval_out/exp077_paired_gate/result.json`
+
+**Interpretation.** This is a clean fresh confirmation of the repaired target
+operator, not a reuse of EXP-075's readout.  On the independent seeds, the 91
+accepted corrections averaged +0.3489 +/- 0.0709/end (t=4.92), while the 149
+rejected tree actions averaged -0.0499 +/- 0.0507 (t=-0.98); these subset numbers
+are descriptive, while the preregistered all-state hybrid gate is the formal pass.
+Unlike EXP-074's misallocated targets, the hybrid was positive in both odd
+(+0.0979, t=2.90) and even (+0.1667, t=3.55) strata, and v25 fallback anchors give
+all ten horizons equal target coverage.  Raw search also passed on this fresh set
+(t=2.35), but the paired screen/fallback hybrid is the certified training operator.
+EXP-077 validates the teacher gate against v26; it does not yet certify a neural
+student or a response to the full mixture.  The preregistered next step is therefore
+fresh paired-gated mixture collection, student training, and full mixture evaluation.
