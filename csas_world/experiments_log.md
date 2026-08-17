@@ -3039,3 +3039,14 @@ JSON diagnostics, and no RNG leakage into outer self-play.  All five reduced-bud
 tree actions were rejected and correctly became v25 fallback targets.  These ends
 are excluded (`artifacts/replay/mcts/az_v30_paired_meta_smoke`); the launcher's
 separate three-member pilots use the full preregistered 16k x eight-repeat operator.
+
+## Standing VecTree setting — `root_out_cap=8` for future runs — 2026-08-17
+
+EXP-072 refuted the EXP-071 hypothesis that raising `root_out_cap` from 8 to 32/64/256
+stabilizes the tree or clearly improves regret.  Therefore `root_out_cap=64` is no
+longer treated as a validated fix.  Starting with the experiment after EXP-078, new
+VecTree collection and evaluation configs use `root_out_cap=8` unless a preregistered
+ablation explicitly varies it.  EXP-078 remains at its frozen value of 64 for every
+shard so its corpus stays internally consistent.  The stale code comments and warning
+that claim caps below 32 are intrinsically unstable should be removed after EXP-078;
+that documentation cleanup must not change the active run.
