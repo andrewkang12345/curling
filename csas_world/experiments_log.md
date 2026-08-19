@@ -3073,3 +3073,29 @@ the false 240-per-cell assertion with an exact check of the frozen 239/241 corpu
 - independent vs_exp074_vectree: +0.1237 +/- 0.0290, t=+4.27
 - independent vs_exp076_bigsel: +0.1223 +/- 0.0267, t=+4.57
 - machine-readable: `eval_out/az_v30_paired_meta/mixture_result.json`
+
+## EXP-079 / az_v30 population robustness promotion gate — PRE-REGISTERED 2026-08-19
+
+**Correction to the proposed v25-only gate.** EXP-070 changed the standing single-model
+promotion rule from incumbent head-to-head to population maximin after measuring cycles.
+A v25-only win is therefore secondary and cannot by itself establish a new champion.
+
+**Frozen population row.** Evaluate `az_v30_paired_meta` against the complete six-model
+EXP-070 population (`v14d`, `v19`, `v21`, `v25`, `v26`, `v27`) under the same new-rules,
+k=4, noisy N=250, both-order, h1-h10, four-shard protocol.  Reuse the already complete
+and independently generated EXP-078 full-N rows versus v14d/v19/v26; these positive
+results are already known.  Before inspecting any missing opponent result, freeze fresh
+rows versus v21/v25/v27.  Every row must contain four valid shards at every horizon.
+
+**Promotion gate.** Declare v30 the new certified *single robust champion* only if all
+six population dScores are positive at t>=2.1.  This is stronger than merely having the
+largest point-estimate maximin and cannot be manufactured by a favorable cycle.  Report
+v30-v25 head-to-head separately, add v30 to the seven-model empirical payoff matrix, and
+recompute maximin and meta-Nash regardless of the verdict.  The legacy-versus-legacy
+matrix retains EXP-070's N=150 screening resolution; the complete v30 row is N=250.
+If any matchup fails, retain az_v25_br as the deployed incumbent pending further evidence.
+This checkpoint-promotion audit is distinct from EXP-078's required second training seed,
+which tests whether the paired-gated response-oracle recipe itself is repeatable.
+
+Driver: `scripts/_exp079_v30_population_gate.sh`; output:
+`eval_out/exp079_v30_population`; all four GPUs are used and the arena remains resident.
