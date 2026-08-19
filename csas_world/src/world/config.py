@@ -167,7 +167,7 @@ class SearchCfg:
     vectree_budget: int = 16000     # simulator calls per decision
     vectree_depth: int = 4          # search plies
     vectree_out_cap: int = 8        # execution outcomes retained at interior chance nodes
-    vectree_root_out_cap: int = 0   # 0 inherits out_cap; use >=64 for a stable root expectation
+    vectree_root_out_cap: int = 0   # 0 inherits out_cap (8); EXP-072 found no benefit from 32/64/256
     vectree_inner_pool: int = 8     # learner proposals at interior decision nodes
     opponent_model_actions: int = 1 # deployed-opponent intentions integrated per explicit node
     opponent_model_deploy_depth: int = 1 # exact selector through this tree depth; raw policy deeper

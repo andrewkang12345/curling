@@ -115,17 +115,9 @@ class VecTree:
         # outcomes (the root expectation is the quantity being reported), and rollout
         # cost is multiplied when the tail policy itself searches (value-greedy steps).
         self.root_out_cap = int(root_out_cap) if root_out_cap else int(out_cap)
-        # GUARD (EXP-071 bug, 2026-08-10): the ROOT chance node's outcome cap bounds how
-        # many execution-noise draws the reported root expectation ever integrates —
-        # independent of budget. Leaving it at the interior default (8) while the
-        # adjudicator used 64 made bigger budgets deepen subtrees around a root estimate
-        # that never got more accurate, and regret INCREASED with budget. Warn loudly
-        # rather than fail silently.
-        if self.root_out_cap < 32:
-            import warnings
-            warnings.warn(f"VecTree root_out_cap={self.root_out_cap} < 32: root expectation "
-                          f"integrates few noise draws; regret may not decrease with budget "
-                          f"(see EXP-071).", RuntimeWarning, stacklevel=2)
+        # EXP-072 found no stability or regret benefit from raising this cap to
+        # 32/64/256, refuting the EXP-071 diagnosis. Keep the root override available
+        # for explicit ablations, but use the inherited interior cap (8) by default.
         self.rollout_mult = max(1, int(rollout_mult))
         self.root_persp = int(round(c[2]))
         self.budget = _Budget()

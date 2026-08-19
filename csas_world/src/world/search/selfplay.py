@@ -262,9 +262,10 @@ def play_game(root, policy, amean_t, astd_t, amean_np, astd_np, value_model,
                 if legal.any() and lp.any():
                     diag.append((int(hh), float(q[legal].max() - q[:n_pol][lp].max())))
         elif scorer in ("vectree", "opp_vectree", "opp_vectree_paired"):
-            # EXP-069: distillation targets from the VECTORISED 4-ply tree (EXP-068's
-            # certified operator: monotone regret, beats flat width at >=16k on game
-            # value). Terminal/rollout leaves only — no value head inside the tree.
+            # EXP-069: distillation targets from the VECTORISED 4-ply tree benchmarked
+            # in EXP-068. EXP-072 later found no stability benefit from increasing the
+            # root outcome cap, so future runs inherit the interior cap (8) by default.
+            # Terminal/rollout leaves only — no value head inside the tree.
             # EXP-074 opp_vectree: learner nodes still optimise, while explicit
             # opponent nodes integrate actions from the fixed opponent model.  The
             # first reply uses an affordable approximation of its deployed selector;

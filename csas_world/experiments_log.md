@@ -3063,3 +3063,13 @@ offset, not a missing record.  The frozen `index % 5` split correspondingly has
 187/197 train targets and 52/44 validation targets per odd/even horizon.  The split is
 not changed post-collection, no replay is rewritten, and the run resumes after replacing
 the false 240-per-cell assertion with an exact check of the frozen 239/241 corpus shape.
+
+**EXP-078 paired-gated BR mixture gate (auto-appended):**
+
+- vs v26 (w=0.652): +0.1200 +/- 0.0273/end (40 cells, 2516 ends)
+- vs v19 (w=0.203): +0.2210 +/- 0.0320/end (40 cells, 2516 ends)
+- vs v14d (w=0.145): +0.1395 +/- 0.0334/end (40 cells, 2516 ends)
+- mixture: **+0.1433 +/- 0.0195/end, t=+7.33 — CERTIFIED PROFITABLE RESPONSE**
+- independent vs_exp074_vectree: +0.1237 +/- 0.0290, t=+4.27
+- independent vs_exp076_bigsel: +0.1223 +/- 0.0267, t=+4.57
+- machine-readable: `eval_out/az_v30_paired_meta/mixture_result.json`
