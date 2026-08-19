@@ -3099,3 +3099,25 @@ which tests whether the paired-gated response-oracle recipe itself is repeatable
 
 Driver: `scripts/_exp079_v30_population_gate.sh`; output:
 `eval_out/exp079_v30_population`; all four GPUs are used and the arena remains resident.
+
+**EXP-079 az_v30 population robustness gate (auto-appended):**
+
+- vs v14d: +0.1395 +/- 0.0334/end, t=+4.17, winrate=0.5205 (40 cells, 2516 ends) — PASS
+- vs v19: +0.2210 +/- 0.0320/end, t=+6.90, winrate=0.5479 (40 cells, 2516 ends) — PASS
+- vs v21: +0.1149 +/- 0.0299/end, t=+3.84, winrate=0.5199 (40 cells, 2516 ends) — PASS
+- vs v25: +0.1689 +/- 0.0339/end, t=+4.99, winrate=0.5233 (40 cells, 2516 ends) — PASS
+- vs v26: +0.1200 +/- 0.0273/end, t=+4.40, winrate=0.5427 (40 cells, 2516 ends) — PASS
+- vs v27: +0.1447 +/- 0.0345/end, t=+4.20, winrate=0.5083 (40 cells, 2516 ends) — PASS
+- worst population matchup: v30 vs v21 +0.1149 +/- 0.0299, t=+3.84
+- robust promotion verdict: **NEW CERTIFIED SINGLE ROBUST CHAMPION**
+- maximin ranking: v30 +0.111, v21 -0.111, v27 -0.127, v26 -0.130, v14d -0.135, v25 -0.158, v19 -0.197
+- updated empirical meta-Nash: v30 100.0%
+- machine-readable: `eval_out/exp079_v30_population/result.json`
+
+**Formal promotion (2026-08-19):** `checkpoints/csas_world/az_v30_paired_meta/best.pt`
+is now the certified single robust champion for the measured population.  Its deploy-policy
+export is `checkpoints/csas_world/az_v30_paired_meta/policy_csas.pt`; the versioned updated
+opponent specification is `configs/opponents/exp079_meta_nash.json` (v30 weight 1.0).  The
+historical EXP-070 mixture is preserved rather than overwritten.  This promotes the checkpoint;
+the paired-gated BR *recipe* still requires the separately preregistered second training seed
+before it is considered a dependable repeatable PSRO oracle.

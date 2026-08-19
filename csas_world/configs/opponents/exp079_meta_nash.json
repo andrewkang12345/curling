@@ -1,0 +1,13 @@
+{
+  "name": "exp079_empirical_meta_nash",
+  "source": "EXP-079 certified seven-model population gate, 2026-08-19",
+  "status": "certified single robust champion on the EXP-070 population",
+  "selection_noise_samples": 8,
+  "members": [
+    {
+      "name": "v30",
+      "checkpoint": "../../checkpoints/csas_world/az_v30_paired_meta/best.pt",
+      "weight": 1.0
+    }
+  ]
+}

@@ -150,7 +150,7 @@ def play_match(mi, resume_mid=None):
     else:
         out, err = api("/api/match", "POST", {
             "players": {SIDE: "agent", OPP: "champion"},
-            "labels": {SIDE: args.model, OPP: "champion az_v14d"},
+            "labels": {SIDE: args.model, OPP: "champion az_v30"},
             "ends": args.ends, "first_hammer": "random"})
         assert not err, err
         mid = out["match"]["id"]

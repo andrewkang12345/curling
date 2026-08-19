@@ -629,7 +629,7 @@ $("newMatchDlg").addEventListener("close", async () => {
   const side = $("nmSide").value, opp = side === "A" ? "B" : "A";
   const players = {}; players[side] = "human"; players[opp] = $("nmOpp").value;
   const labels = {}; labels[side] = $("nmName").value || "human";
-  if ($("nmOpp").value === "champion") labels[opp] = "champion az_v14d";
+  if ($("nmOpp").value === "champion") labels[opp] = "champion az_v30";
   const hammerSel = $("nmHammer").value;
   const first_hammer = hammerSel === "random" ? "random" : (hammerSel === "you" ? side : opp);
   $("sheetHint").textContent = "creating match (first run loads the model — up to a minute)…";

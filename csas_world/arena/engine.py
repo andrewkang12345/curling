@@ -45,7 +45,9 @@ NUM_STONES = env_bridge.NUM_STONES
 POS_MAX = 4095.0
 
 DEFAULT_CKPT = os.environ.get(
-    "ARENA_CKPT", str(ARENA_DIR.parent / "checkpoints/csas_world/az_v14d/best.pt"))
+    "ARENA_CKPT",
+    str(ARENA_DIR.parent / "checkpoints/csas_world/az_v30_paired_meta/best.pt"),
+)
 DEFAULT_NOISE_CFG = os.environ.get("ARENA_NOISE_CFG", "configs/noise/v2_fullsheet.json")
 CHAMPION_CANDIDATES = int(os.environ.get("ARENA_CHAMPION_CANDIDATES", "48"))
 CHAMPION_NOISE_SAMPLES = int(os.environ.get("ARENA_CHAMPION_NOISE_SAMPLES", "8"))
