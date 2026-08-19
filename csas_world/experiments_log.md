@@ -3050,3 +3050,16 @@ ablation explicitly varies it.  EXP-078 remains at its frozen value of 64 for ev
 shard so its corpus stays internally consistent.  The stale code comments and warning
 that claim caps below 32 are intrinsically unstable should be removed after EXP-078;
 that documentation cleanup must not change the active run.
+
+**EXP-078 collection completion / validator correction (2026-08-19).** Collection
+finished cleanly at 22:13 UTC with all 120 shards, 480 ends, 4,800 records, the exact
+312/96/72 opponent allocation, and 2,400 learner point targets (885 accepted tree
+corrections, 1,515 v25 fallbacks).  The launcher then stopped before training because
+its structural assertion incorrectly required exactly 240 learner targets at every
+horizon.  Since source roots can begin with either numeric block to move while the
+opponent block alternated by game index, the realized complete corpus has 239 targets
+at each odd horizon and 241 at each even horizon.  This is a one-target global parity
+offset, not a missing record.  The frozen `index % 5` split correspondingly has
+187/197 train targets and 52/44 validation targets per odd/even horizon.  The split is
+not changed post-collection, no replay is rewritten, and the run resumes after replacing
+the false 240-per-cell assertion with an exact check of the frozen 239/241 corpus shape.
